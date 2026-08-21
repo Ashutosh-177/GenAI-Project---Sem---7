@@ -1,0 +1,366 @@
+QCI AI KNOWLEDGE HUB — DRAFTING EXAMPLES
+==========================================
+Ready-to-use example answers for all 12 document templates in the
+"Draft a Document" tab of the demo webpage. Answer each question in the
+order shown. Fields marked (brief) are AI-expanded into a full paragraph —
+give a real sentence, not a placeholder; anything under ~3 words gets
+rejected by design. Fields marked (default) can be left blank to accept
+the shown default automatically.
+
+These are the same values used in scripts/test_all_templates.py's
+automated smoke test — all 12 are confirmed to render successfully.
+
+
+==========================================
+1. WORK ORDER — SERVICES/CONSULTANCY
+==========================================
+1.  What is the work order number?
+    QCI/WO/2026/030
+2.  What is the issue date? (default: today)
+    19 August 2026
+3.  Issuing organisation? (default)
+    Quality Council of India
+4.  Who is the contractor / service provider (name)?
+    Bharat Digital Systems Pvt. Ltd.
+5.  Contractor's address?
+    Noida, UP
+6.  What is the project / work title?
+    Annual IT Infrastructure Support
+7.  Briefly, what is the scope of work? (brief)
+    provision of IT helpdesk, network monitoring, and server maintenance for QCI's Delhi office
+8.  What is the contract value?
+    Rs. 15,00,000
+9.  What is the work start date?
+    1 September 2026
+10. What is the completion period?
+    12 months
+11. What are the payment terms?
+    Quarterly in advance
+12. Who is signing on behalf of the issuing organisation (name)?
+    R. Sharma
+13. Their designation?
+    Director, IT
+
+
+==========================================
+2. WORK ORDER — GOODS/SUPPLY
+==========================================
+1.  What is the work order number?
+    QCI/WO/2026/031
+2.  What is the issue date? (default: today)
+    19 August 2026
+3.  Issuing organisation? (default)
+    Quality Council of India
+4.  Who is the supplier?
+    Nexora Electronics Pvt. Ltd.
+5.  Supplier's address?
+    Gurgaon, Haryana
+6.  Briefly, what goods/items are being supplied? (brief)
+    supply of 50 desktop computers and 10 network switches for office IT upgrade
+7.  Quantity and total order value?
+    50 units desktop, 10 units switch; Rs. 22,00,000 total
+8.  Required delivery date?
+    15 September 2026
+9.  Delivery location?
+    QCI HQ, New Delhi
+10. Warranty terms?
+    3 years onsite warranty on all hardware
+11. Who is signing on behalf of the issuing organisation (name)?
+    R. Sharma
+12. Their designation?
+    Director, IT
+
+
+==========================================
+3. WORK ORDER — AMC/MAINTENANCE
+==========================================
+1.  What is the AMC reference number?
+    QCI/AMC/2026/004
+2.  What is the issue date? (default: today)
+    19 August 2026
+3.  Issuing organisation? (default)
+    Quality Council of India
+4.  Who is the maintenance vendor?
+    TechCare Services Pvt. Ltd.
+5.  Vendor's address?
+    Noida, UP
+6.  Briefly, what equipment/systems does this AMC cover? (brief)
+    maintenance of HVAC systems, UPS units, and fire safety equipment across QCI's office premises
+7.  What is the AMC period?
+    1 year from go-live
+8.  Service visit frequency?
+    Quarterly preventive maintenance
+9.  Response time SLA for breakdowns?
+    4 hours for critical breakdowns
+10. AMC value?
+    Rs. 8,00,000 per annum
+11. Who is signing on behalf of the issuing organisation (name)?
+    R. Sharma
+12. Their designation?
+    Director, IT
+
+
+==========================================
+4. MOU — INSTITUTIONAL COLLABORATION
+==========================================
+1.  What is the MoU reference number?
+    QCI/MOU/2026/011
+2.  What is the date of this MoU? (default: today)
+    19 August 2026
+3.  First party (usually QCI)? (default)
+    Quality Council of India
+4.  Second party (the other organisation)?
+    National Productivity Council
+5.  Second party's address?
+    Lodhi Road, New Delhi
+6.  What is the title / purpose of this MoU?
+    Collaboration on Quality Benchmarking
+7.  Briefly, what's the background/context for this MoU? (brief)
+    both organisations share an interest in improving quality benchmarks across Indian industry sectors
+8.  Briefly, what are the objectives of this collaboration? (brief)
+    jointly conduct quality audits, publish benchmarking reports, and organise capacity-building workshops
+9.  What is the duration of this MoU?
+    3 years from date of signing
+10. Who signs for the first party (name)?
+    Anjali Verma
+11. Their designation?
+    CEO, QCI
+12. Who signs for the second party (name)?
+    Vikram Singh
+13. Their designation?
+    Director General, NPC
+
+
+==========================================
+5. MOU — INTERNATIONAL/BILATERAL
+==========================================
+1.  What is the MoU reference number?
+    QCI/MOU/2026/012
+2.  What is the date of this MoU? (default: today)
+    19 August 2026
+3.  Indian party? (default)
+    Quality Council of India
+4.  Foreign party (organisation name)?
+    Singapore Accreditation Council
+5.  Foreign party's country?
+    Singapore
+6.  Briefly, what is the purpose of this bilateral MoU? (brief)
+    establish mutual recognition of accreditation outcomes between the two councils
+7.  Briefly, what areas of cooperation does this cover? (brief)
+    joint assessor training, information exchange on accreditation standards, and periodic review meetings
+8.  Duration of this MoU?
+    3 years from date of signing
+9.  Signatory for the Indian party (name)?
+    Anjali Verma
+10. Their designation?
+    CEO, QCI
+11. Signatory for the foreign party (name)?
+    Wei Tan
+12. Their designation?
+    Director, SAC
+
+
+==========================================
+6. MOU — INTER-DEPARTMENTAL/GOVERNMENT
+==========================================
+1.  What is the MoU reference number?
+    QCI/MOU/2026/013
+2.  What is the date of this MoU? (default: today)
+    19 August 2026
+3.  First department/body? (default)
+    Quality Council of India
+4.  Second department/body?
+    Ministry of MSME
+5.  Briefly, what is this MoU about? (brief)
+    coordinated support for quality certification of MSME clusters across India
+6.  Briefly, what are each party's responsibilities? (brief)
+    QCI will conduct assessments and MSME Ministry will facilitate outreach to eligible clusters
+7.  How often will this MoU be reviewed?
+    Annually
+8.  Signatory for the first party (name)?
+    Anjali Verma
+9.  Their designation?
+    CEO, QCI
+10. Signatory for the second party (name)?
+    Aloke Tikku
+11. Their designation?
+    Joint Secretary, Ministry of MSME
+
+
+==========================================
+7. AGREEMENT — SERVICE
+==========================================
+1.  What is the agreement number?
+    QCI/AGR/2026/009
+2.  What is the agreement date? (default: today)
+    19 August 2026
+3.  Client? (default)
+    Quality Council of India
+4.  Service provider?
+    SecureNet Facilities Pvt. Ltd.
+5.  Provider's address?
+    Gurgaon, Haryana
+6.  Briefly, what services are covered? (brief)
+    provision of security personnel and access control systems for QCI's office premises
+7.  Briefly, what are the SLA/performance terms? (brief)
+    24x7 security coverage with incident response within 15 minutes
+8.  Contract value?
+    Rs. 15,00,000
+9.  Contract duration?
+    2 years
+10. Termination notice period?
+    60 days written notice
+11. Signatory for the provider (name)?
+    Manoj Gupta
+12. Their designation?
+    Operations Head, SecureNet
+13. Signatory for the client (name)?
+    R. Sharma
+14. Their designation?
+    Director, IT
+
+
+==========================================
+8. AGREEMENT — CONSULTANCY
+==========================================
+1.  What is the agreement number?
+    QCI/AGR/2026/010
+2.  What is the agreement date? (default: today)
+    19 August 2026
+3.  Client? (default)
+    Quality Council of India
+4.  Consultant?
+    Dr. Kavita Rao
+5.  Consultant's address?
+    Bengaluru, Karnataka
+6.  Briefly, what is the scope of this consultancy? (brief)
+    advisory support on digital transformation strategy for QCI's accreditation boards
+7.  Briefly, what are the key deliverables? (brief)
+    a digital roadmap document, quarterly progress reviews, and a final recommendations report
+8.  Fee structure?
+    Rs. 5,00,000 per quarter
+9.  Engagement period?
+    6 months
+10. Signatory for the consultant (name)?
+    Dr. Kavita Rao
+11. Their designation?
+    Principal Consultant
+12. Signatory for the client (name)?
+    R. Sharma
+13. Their designation?
+    Director, IT
+
+
+==========================================
+9. AGREEMENT — LICENSING/IP
+==========================================
+1.  What is the agreement number?
+    QCI/AGR/2026/011
+2.  What is the agreement date? (default: today)
+    19 August 2026
+3.  Licensor? (default)
+    Quality Council of India
+4.  Licensee?
+    EduTech Solutions Pvt. Ltd.
+5.  Licensee's address?
+    Pune, Maharashtra
+6.  Briefly, what IP/materials are being licensed? (brief)
+    QCI's training curriculum and certification materials for quality management courses
+7.  Briefly, what are the usage terms/restrictions? (brief)
+    non-exclusive use limited to online course delivery, no resale or sublicensing permitted
+8.  Royalty/fee terms?
+    10% of course revenue, paid quarterly
+9.  License duration?
+    2 years, renewable
+10. Signatory for the licensor (name)?
+    Anjali Verma
+11. Their designation?
+    CEO, QCI
+12. Signatory for the licensee (name)?
+    Rohan Mehta
+13. Their designation?
+    CEO, EduTech Solutions
+
+
+==========================================
+10. PROPOSAL — TECHNICAL
+==========================================
+1.  What is the proposal number?
+    QCI/PROP/2026/015
+2.  What is the proposal date? (default: today)
+    19 August 2026
+3.  Who is submitting this proposal (bidder name)?
+    Innotech Consulting Pvt. Ltd.
+4.  Submitted to? (default)
+    Quality Council of India
+5.  What is the project title?
+    Annual IT Infrastructure Support
+6.  Briefly, what is the proposed technical approach? (brief)
+    a phased implementation using agile methodology with monthly stakeholder reviews
+7.  Briefly, describe the proposed team. (brief)
+    a 6-member team including a project lead, 2 senior consultants, and 3 analysts
+8.  Implementation timeline?
+    6 months across 3 phases
+9.  Authorized signatory (name)?
+    Suresh Iyer
+10. Their designation?
+    Managing Partner, Innotech Consulting
+
+
+==========================================
+11. PROPOSAL — FINANCIAL
+==========================================
+1.  What is the proposal number?
+    QCI/PROP/2026/016
+2.  What is the proposal date? (default: today)
+    19 August 2026
+3.  Who is submitting this proposal (bidder name)?
+    Innotech Consulting Pvt. Ltd.
+4.  Submitted to? (default)
+    Quality Council of India
+5.  What is the project title?
+    Annual IT Infrastructure Support
+6.  Briefly, summarise the cost breakdown. (brief)
+    cost split across personnel (60%), infrastructure (25%), and contingency (15%)
+7.  Briefly, describe the proposed payment schedule. (brief)
+    30% advance, 40% on midterm milestone, 30% on completion
+8.  Total proposal value?
+    Rs. 45,00,000
+9.  Proposal validity period?
+    120 days
+10. Authorized signatory (name)?
+    Suresh Iyer
+11. Their designation?
+    Managing Partner, Innotech Consulting
+
+
+==========================================
+12. PROPOSAL — COMBINED TECHNICAL & FINANCIAL
+==========================================
+1.  What is the proposal number?
+    QCI/PROP/2026/017
+2.  What is the proposal date? (default: today)
+    19 August 2026
+3.  Who is submitting this proposal (bidder name)?
+    Innotech Consulting Pvt. Ltd.
+4.  Submitted to? (default)
+    Quality Council of India
+5.  What is the project title?
+    Annual IT Infrastructure Support
+6.  Briefly, summarise the overall proposal. (brief)
+    a comprehensive digital upgrade proposal combining infrastructure modernisation with staff training
+7.  Briefly, describe the approach and cost basis together. (brief)
+    phased rollout over 6 months with costs allocated proportionally to each phase's scope
+8.  Total proposal value?
+    Rs. 45,00,000
+9.  Implementation timeline?
+    6 months across 3 phases
+10. Authorized signatory (name)?
+    Suresh Iyer
+11. Their designation?
+    Managing Partner, Innotech Consulting
+
+
+==========================================
+Demo URL: http://localhost:8501  ->  "Draft a Document" tab
+==========================================

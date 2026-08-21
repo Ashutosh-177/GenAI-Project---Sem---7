@@ -1,0 +1,14 @@
+#	Field (question you'll see)	Example answer
+1	Work order number	QCI/WO/2026/021
+2	Issue date	19 August 2026 (or leave blank — defaults to today)
+3	Issuing organisation	Quality Council of India (already defaulted — just hit Next)
+4	Contractor / service provider name	Nexora Technologies Pvt. Ltd.
+5	Contractor's address	B-42, Sector 63, Noida, Uttar Pradesh - 201301
+6	Project / work title	Website Revamp and Hosting Services for QCI Portal
+7	Scope of work (brief)	redesign of QCI's public website with improved accessibility, mobile responsiveness, and migration to secure cloud hosting
+8	Contract value	Rs. 12,00,000 (Rupees Twelve Lakh only)
+9	Work start date	1 September 2026
+10	Completion period	4 months from start date
+11	Payment terms	30% advance, 40% on UAT sign-off, 30% on go-live
+12	Authorized signatory name	Priya Nair
+13	Signatory's designation	Deputy Director, IT Division

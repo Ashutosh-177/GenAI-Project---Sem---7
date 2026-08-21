@@ -1,0 +1,21 @@
+venv/
+__pycache__/
+*.pyc
+.env
+.claude/
+
+# Sample docs ARE tracked (data/samples/) — they're public government/QCI
+# documents, not private data, and the project isn't runnable without them.
+# Everything below is generated/runtime output, not source.
+data/generated/*
+!data/generated/.gitkeep
+data/ocr_test/*
+!data/ocr_test/.gitkeep
+data/voice_test/*
+!data/voice_test/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+
+*.log
+qdrant_storage/
+.ipynb_checkpoints/

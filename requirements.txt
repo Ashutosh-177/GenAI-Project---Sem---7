@@ -1,0 +1,31 @@
+# --- LLM serving ---
+ollama                  # Python client for local Ollama server (Q&A, summarization — stays self-hosted)
+anthropic               # Claude API client (document drafting only — see config.py for why)
+
+# --- Document parsing ---
+pdfplumber              # PDF text extraction
+pymupdf                 # fast/layout-aware PDF parsing (fitz)
+python-docx             # DOCX read
+openpyxl                # XLSX read
+python-pptx             # PPT/PPTX read
+pytesseract             # OCR (needs Tesseract binary installed separately)
+Pillow                  # image handling for OCR
+
+# --- Doc generation ---
+docxtpl                 # templated .docx output (Jinja2-style)
+
+# --- Embeddings & vector store ---
+sentence-transformers   # for multilingual-e5-large embeddings
+qdrant-client           # vector DB client
+
+# --- RAG orchestration ---
+llama-index             # retrieval + chunking + citation chains
+
+# --- Backend/API ---
+fastapi
+uvicorn[standard]
+python-multipart
+
+# --- Utilities ---
+python-dotenv
+pydantic
