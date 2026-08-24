@@ -65,7 +65,7 @@ def main():
 
     print()
     print("Some templates render blank sections right now." if any_gap
-          else "All 12 templates: every placeholder is covered.")
+          else f"All {len(ALL_TEMPLATE_SPECS)} templates: every placeholder is covered.")
 
 
 if __name__ == "__main__":

@@ -11,9 +11,22 @@ voice transcription (faster-whisper) all stay local. Only the
 reasoning/generation calls that used to go through local Ollama now go
 through Claude — see Memory.md for the full history of this decision and
 its RFP-compliance tradeoff (draft/query content now leaves the machine)."""
+import random
+import time
+
 import anthropic
 
 from config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
+
+# Status codes worth retrying — transient server-side conditions, not a
+# problem with the request itself. 529 specifically: a real user hit this
+# mid-draft (a 25-30-call Technical Proposal render, each call retryable
+# individually) and the whole Streamlit app crashed to a raw traceback on
+# the very last narrative field — losing nothing already typed (answers
+# live in session_state), but wasting every prior LLM call in that render.
+_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 529}
+_MAX_ATTEMPTS = 5
+_BASE_DELAY_S = 2.0
 
 # Server-side fallback: on a policy refusal the API silently re-runs the same
 # request on a fallback model within the same call, instead of returning
@@ -72,6 +85,26 @@ def _response_text(response) -> str:
     )
 
 
+def _call_with_retry(fn):
+    """Retries `fn()` on transient errors (overload, rate limit, connection
+    issues) with exponential backoff + jitter, up to _MAX_ATTEMPTS. Anything
+    else (bad request, refusal, auth) is not retryable and raises straight
+    through on the first attempt — retrying those would just waste time
+    reproducing the same permanent failure."""
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            return fn()
+        except anthropic.APIStatusError as e:
+            if e.status_code not in _RETRYABLE_STATUS_CODES or attempt == _MAX_ATTEMPTS - 1:
+                raise
+        except anthropic.APIConnectionError:
+            if attempt == _MAX_ATTEMPTS - 1:
+                raise
+        delay = _BASE_DELAY_S * (2 ** attempt) + random.uniform(0, 1)
+        time.sleep(delay)
+    raise AssertionError("unreachable")  # loop always returns or raises
+
+
 def chat(prompt: str, max_tokens: int = 16000, system: str | None = None) -> str:
     """One user-turn call to Claude, returning just the text. Every call
     site that used to do `ollama.Client(host=...).chat(model=..., messages=
@@ -96,12 +129,12 @@ def chat(prompt: str, max_tokens: int = 16000, system: str | None = None) -> str
 
     if _fallbacks_supported:
         try:
-            response = client.beta.messages.create(
-                betas=[_FALLBACK_BETA], fallbacks="default", **kwargs)
+            response = _call_with_retry(lambda: client.beta.messages.create(
+                betas=[_FALLBACK_BETA], fallbacks="default", **kwargs))
             return _response_text(response)
         except anthropic.BadRequestError as e:
             if "fallbacks" not in str(e):
                 raise
             _fallbacks_supported = False  # this model doesn't take them; stop trying
 
-    return _response_text(client.messages.create(**kwargs))
+    return _response_text(_call_with_retry(lambda: client.messages.create(**kwargs)))

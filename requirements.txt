@@ -13,6 +13,7 @@ Pillow                  # image handling for OCR
 
 # --- Doc generation ---
 docxtpl                 # templated .docx output (Jinja2-style)
+matplotlib              # renders architecture/flow/timeline diagrams to PNG for embedding
 
 # --- Embeddings & vector store ---
 sentence-transformers   # for multilingual-e5-large embeddings

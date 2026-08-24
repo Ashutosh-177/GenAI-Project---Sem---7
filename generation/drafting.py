@@ -18,6 +18,7 @@ from xml.sax.saxutils import escape as xml_escape
 from docxtpl import DocxTemplate
 
 from generation.llm_client import chat as _llm_chat
+from generation.template_settings import TemplateSettings
 from retrieval.store import search
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -322,6 +323,288 @@ def _draft_terms_and_conditions(project_title: str, known_facts: dict | None = N
     return result
 
 
+def _generate_architecture_layers(project_title: str, problem_statement: str,
+                                   known_facts: dict) -> str:
+    """Derives the Solution & Technology Architecture diagram FROM the
+    actual problem statement (executive summary + understanding +
+    objectives, gathered by the caller) instead of requiring the user to
+    hand-type the diagram structure. Still structured output, not free
+    narrative prose — the prompt constrains the model to exactly the
+    "Layer Name: Description" line format _parse_architecture_layers
+    expects, same reliability reasoning as every other diagram-input
+    decision in this module: a diagram needs to know precisely how many
+    boxes and what's in each."""
+    facts_block = ""
+    if known_facts:
+        facts_lines = "\n".join(f"- {label}: {value}" for label, value in known_facts.items())
+        facts_block = f"\nKnown facts — use these names EXACTLY as given, verbatim:\n{facts_lines}\n"
+
+    prompt = f"""Based on this problem statement for a technical proposal titled \
+"{project_title}", propose a realistic layered technical architecture for the solution.
+{facts_block}
+Problem statement:
+{problem_statement}
+
+Output ONLY 4-6 lines, one per architecture layer, each in EXACTLY this format:
+Layer Name: One-sentence description of what runs in this layer
+
+Layers should flow top-to-bottom in a sensible order (e.g. Frontend, Security, \
+Backend/API, Data). Be specific to what the problem statement actually describes — \
+don't invent technology choices the problem statement gives no basis for; where the \
+brief doesn't specify a technology, describe the layer's role generically instead \
+of guessing a stack. No preamble, no numbering, no bullet points — just the "Layer \
+Name: description" lines, nothing else."""
+
+    result = _llm_chat(prompt)
+    return _strip_llm_meta_commentary(result)
+
+
+def _generate_flow_steps(project_title: str, problem_statement: str,
+                          known_facts: dict) -> str:
+    """Same reasoning as _generate_architecture_layers, for the primary
+    process/data flow instead of the architecture stack."""
+    facts_block = ""
+    if known_facts:
+        facts_lines = "\n".join(f"- {label}: {value}" for label, value in known_facts.items())
+        facts_block = f"\nKnown facts — use these names EXACTLY as given, verbatim:\n{facts_lines}\n"
+
+    prompt = f"""Based on this problem statement for a technical proposal titled \
+"{project_title}", identify the single most important process or data flow the \
+solution needs to support.
+{facts_block}
+Problem statement:
+{problem_statement}
+
+Output ONLY 4-6 steps, one per line, in the order they happen. Each step must be \
+SHORT — 2-5 words, like a diagram box label, not a sentence: "User submits enquiry", \
+"Validate input", "Persist to database", not "The user fills out and submits the \
+enquiry form on the public-facing website". These render as boxes in a flow diagram, \
+and a long phrase makes an oversized box. Be specific to what the problem statement \
+actually describes, just terse about it. No preamble, no numbering (numbers are \
+added automatically), no bullet points — just the plain step text, one per line, \
+nothing else."""
+
+    result = _llm_chat(prompt)
+    return _strip_llm_meta_commentary(result)
+
+
+def _generate_timeline_phases(project_title: str, problem_statement: str,
+                               known_facts: dict) -> str:
+    """Same derive-from-the-problem-statement reasoning as
+    _generate_architecture_layers/_generate_flow_steps, for the
+    implementation timeline instead of the architecture/flow diagrams."""
+    facts_block = ""
+    if known_facts:
+        facts_lines = "\n".join(f"- {label}: {value}" for label, value in known_facts.items())
+        facts_block = f"\nKnown facts — use these names EXACTLY as given, verbatim:\n{facts_lines}\n"
+
+    prompt = f"""Based on this problem statement for a technical proposal titled \
+"{project_title}", propose a realistic phased implementation timeline for the solution.
+{facts_block}
+Problem statement:
+{problem_statement}
+
+Output ONLY 3-5 lines, one per phase, each in EXACTLY this format (pipe-separated, \
+three fields):
+Phase Name | Week range | One-sentence description of what happens in this phase
+
+Example: Phase 1 — Discovery & Design | Weeks 1-3 | Kick-off, requirement study and \
+design approval before build starts.
+
+Phases should flow in delivery order and cover the whole engagement end-to-end (e.g. \
+discovery/design, build, deploy/hardening, testing/audit if relevant, go-live). Week \
+ranges should be sequential and non-overlapping-in-spirit (a later phase can start \
+before an earlier one fully ends, e.g. "Weeks 8-10" after "Weeks 3-8", but must not \
+regress backward). Be specific to what the problem statement actually describes. No \
+preamble, no numbering beyond what's already in the phase name, no bullet points — \
+just the "Phase Name | Week range | description" lines, nothing else."""
+
+    result = _llm_chat(prompt)
+    return _strip_llm_meta_commentary(result)
+
+
+def _generate_structured_lines(instructions: str, project_title: str, problem_statement: str,
+                                known_facts: dict) -> str:
+    """Shared driver for every "derive structured content from the problem
+    statement" need added after the original two diagrams — table rows for
+    the compliance matrix, modules & features, admin capabilities/roles,
+    enquiry channels, security areas, SEO items, AMC scope, and the
+    sitemap/core-module/security flow step lists. Rather than one
+    near-identical _generate_* function per field (the pattern
+    _generate_architecture_layers/_generate_flow_steps/
+    _generate_timeline_phases established), `instructions` supplies only
+    the task-specific framing and exact output format; this wraps it with
+    the problem statement and known-facts grounding every one of them
+    shares. The three original functions are left as they are (already
+    verified working) rather than retrofitted onto this — new fields only."""
+    facts_block = ""
+    if known_facts:
+        facts_lines = "\n".join(f"- {label}: {value}" for label, value in known_facts.items())
+        facts_block = f"\nKnown facts — use these names EXACTLY as given, verbatim:\n{facts_lines}\n"
+
+    prompt = f"""Based on this problem statement for a technical proposal titled \
+"{project_title}":
+{facts_block}
+Problem statement:
+{problem_statement}
+
+{instructions}"""
+
+    result = _llm_chat(prompt)
+    return _strip_llm_meta_commentary(result)
+
+
+def _parse_pipe_rows(raw: str, min_fields: int = 2) -> list[list[str]]:
+    """Splits "Field 1 | Field 2 | Field 3" lines into trimmed field lists —
+    shared parser for every new pipe-delimited table/flow field. Pipe-
+    delimited rather than colon-delimited (like the original architecture
+    layers) because these descriptions are free prose that legitimately
+    contains colons (e.g. "Gate: development starts after design
+    approval"). Rows with fewer than `min_fields` fields are dropped
+    rather than padded — a malformed row silently missing a column would
+    otherwise misalign every column after it in the rendered table."""
+    rows = []
+    for line in (raw or "").strip().splitlines():
+        line = line.strip().lstrip("-•").strip()
+        if not line or "|" not in line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= min_fields:
+            rows.append(parts)
+    return rows
+
+
+def _parse_architecture_layers(raw: str) -> list[tuple[str, str]]:
+    """Turns user-typed "Layer Name: description" lines into (label, desc)
+    pairs for the layered-architecture diagram. Structured input, not AI
+    prose — a diagram needs to know exactly how many boxes and what goes
+    in each, which free-form narrative text can't guarantee reliably."""
+    layers = []
+    for line in (raw or "").strip().splitlines():
+        line = line.strip().lstrip("-•").strip()
+        if not line:
+            continue
+        if ":" in line:
+            label, desc = line.split(":", 1)
+            layers.append((label.strip(), desc.strip()))
+        else:
+            layers.append((line, ""))
+    return layers
+
+
+def _parse_flow_steps(raw: str) -> list[str]:
+    """One flow-diagram step per line — same structured-input reasoning
+    as _parse_architecture_layers."""
+    return [line.strip().lstrip("-•").strip() for line in (raw or "").strip().splitlines()
+            if line.strip()]
+
+
+def _parse_timeline_phases(raw: str) -> list[tuple[str, str, str]]:
+    """Turns "Phase Name | Week range | description" lines into
+    (phase_name, week_range, description) triples — pipe-separated rather
+    than colon-separated like the other two diagram parsers, since a
+    timeline description is free prose that legitimately contains colons
+    (e.g. "Gate: development starts after design approval")."""
+    phases = []
+    for line in (raw or "").strip().splitlines():
+        line = line.strip().lstrip("-•").strip()
+        if not line or "|" not in line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 3:
+            phases.append((parts[0], parts[1], parts[2]))
+        elif len(parts) == 2:
+            phases.append((parts[0], parts[1], ""))
+    return phases
+
+
+def _inject_generated_content(doc, content: dict, settings) -> None:
+    """Replaces every `[[MARKER]]` placeholder paragraph (see
+    build_technical_proposal_template's docstring for why these are
+    plain-text markers, not Jinja fields) with real generated content —
+    diagrams and UI mockups rendered as images
+    (generation/diagram_render.py) embedded directly into the marker
+    paragraph, and data tables/feature grids built as real Word tables
+    inserted in the marker's place — using scripts/build_templates.py's
+    functions against the already-rendered document. docxtpl's
+    DocxTemplate wraps a real python-docx Document (`tpl.get_docx()`), and
+    `.save()` persists that same object — so editing it here after
+    render() is reflected in the saved file, the same mechanism as
+    everything else in this module that manipulates the doc post-render.
+
+    Grew from the original _inject_diagrams (architecture/flow/timeline
+    only) into this broader function when the template grew from a
+    9-section skeleton to the real proposal's full 17 sections — most of
+    the new sections are tables, not diagrams, so this now takes one
+    `content` dict rather than a positional arg per diagram to avoid an
+    unwieldy 10+-parameter signature."""
+    import sys
+    from pathlib import Path as _P
+    sys.path.insert(0, str(_P(__file__).resolve().parent.parent))
+    from scripts.build_templates import (
+        _add_layered_architecture_diagram, _add_flow_diagram, _add_timeline_diagram,
+        _add_sitemap_diagram_image, _add_ui_mockup_image, _add_data_table, _add_feature_grid,
+    )
+
+    def _find(marker: str):
+        return next((p for p in doc.paragraphs if marker in p.text), None)
+
+    def _image_marker(marker: str, build_fn, *args):
+        p = _find(marker)
+        if p is not None:
+            build_fn(doc, p, *args, settings)
+
+    def _table_marker(marker: str, build_fn, *args, **kwargs):
+        p = _find(marker)
+        if p is None:
+            return
+        table = build_fn(*args, settings=settings, **kwargs)
+        if table is None:
+            return
+        p._p.addnext(table._tbl)
+        p._p.getparent().remove(p._p)
+
+    _image_marker("[[ARCHITECTURE_DIAGRAM]]", _add_layered_architecture_diagram,
+                   content.get("layers") or [])
+    _image_marker("[[DATA_FLOW_DIAGRAM]]", _add_flow_diagram, content.get("flow_steps") or [])
+    _image_marker("[[TIMELINE_DIAGRAM]]", _add_timeline_diagram, content.get("timeline") or [])
+    _image_marker("[[SITEMAP_DIAGRAM]]", _add_sitemap_diagram_image,
+                   content.get("site_name", ""), content.get("sitemap_pillars") or [])
+    _image_marker("[[CORE_MODULE_FLOW]]", _add_flow_diagram, content.get("core_module_flow") or [])
+    _image_marker("[[SECURITY_FLOW]]", _add_flow_diagram, content.get("security_flow") or [])
+    # Nav items, feature cards and admin sidebar items reflect THIS
+    # project's own sitemap/modules/admin-capabilities rather than a
+    # generic "Home / About / Services" skeleton every project used to
+    # get — a real user asked whether section 14's mockups were the same
+    # image every time; before this they effectively were.
+    nav_items = [name for name, _subs in (content.get("sitemap_pillars") or [])]
+    cards = [row[0] for row in (content.get("modules_features") or []) if row]
+    sidebar_items = [row[0] for row in (content.get("admin_capabilities") or []) if row]
+    _image_marker("[[UI_MOCKUP_HOME]]", _add_ui_mockup_image,
+                   "public_home", content.get("project_title", ""), nav_items, cards, None)
+    _image_marker("[[UI_MOCKUP_ADMIN]]", _add_ui_mockup_image,
+                   "admin_dashboard", content.get("project_title", ""), None, None, sidebar_items)
+
+    _table_marker("[[COMPLIANCE_MATRIX]]", _add_data_table, doc,
+                  headers=["#", "Requirement", "Proposed Solution", "Status"],
+                  rows=[[str(i + 1), req, sol, "Complied"]
+                        for i, (req, sol) in enumerate(content.get("compliance_items") or [])])
+    _table_marker("[[MODULES_TABLE]]", _add_data_table, doc,
+                  headers=["Module", "What it does"], rows=content.get("modules_features") or [])
+    _table_marker("[[ADMIN_ROLES_TABLE]]", _add_data_table, doc,
+                  headers=["Role", "Can do"], rows=content.get("admin_roles") or [])
+    _table_marker("[[ENQUIRY_TABLE]]", _add_data_table, doc,
+                  headers=["Form", "Captured", "Routed to"], rows=content.get("enquiry_channels") or [])
+    _table_marker("[[SECURITY_TABLE]]", _add_data_table, doc,
+                  headers=["Area", "What we implement"], rows=content.get("security_areas") or [])
+    _table_marker("[[SEO_TABLE]]", _add_data_table, doc,
+                  headers=["Item", "Detail"], rows=content.get("seo_performance_items") or [])
+    _table_marker("[[AMC_TABLE]]", _add_data_table, doc,
+                  headers=["Scope Area", "What's Covered"], rows=content.get("amc_scope") or [])
+    _table_marker("[[ADMIN_FEATURE_GRID]]", _add_feature_grid, doc,
+                  items=[(row[0], row[1]) for row in content.get("admin_capabilities") or [] if len(row) >= 2])
+
+
 def _next_version(prefix: str, doc_no: str) -> int:
     """Auto-versioning per the RFP's deliverable spec (v1, v2, v3...) — scans
     what's already on disk for this document number rather than tracking
@@ -381,10 +664,54 @@ class TemplateSpec:
     narrative_fields: tuple
 
 
-def render_document(session: DraftSession, spec: TemplateSpec) -> Path:
+# Mapping from spec keys to the build function + recipe args needed for
+# dynamic template rebuilding when custom TemplateSettings are provided.
+# Imported lazily (at call time) to avoid circular imports with
+# scripts/build_templates.py.
+_SPEC_KEY_TO_BUILD_INFO: dict | None = None
+
+
+def _get_build_info() -> dict:
+    """Lazily build a mapping from spec.key to the build function + kwargs
+    needed to dynamically rebuild a template with custom settings."""
+    global _SPEC_KEY_TO_BUILD_INFO
+    if _SPEC_KEY_TO_BUILD_INFO is not None:
+        return _SPEC_KEY_TO_BUILD_INFO
+
+    import sys
+    from pathlib import Path as _P
+    sys.path.insert(0, str(_P(__file__).resolve().parent.parent))
+    from scripts.build_templates import (
+        build_work_order_template, build_mou_template,
+        build_generic_template, build_technical_proposal_template, REMAINING_TEMPLATES,
+    )
+
+    info = {
+        "work_order_services": {"fn": build_work_order_template, "kwargs": {}},
+        "mou_institutional": {"fn": build_mou_template, "kwargs": {}},
+        "technical_proposal": {"fn": build_technical_proposal_template, "kwargs": {}},
+    }
+    # Map each generic recipe's filename back to the spec key that uses it
+    _filename_to_key = {s.template_file: s.key for s in ALL_TEMPLATE_SPECS}
+    for recipe in REMAINING_TEMPLATES:
+        key = _filename_to_key.get(recipe["filename"])
+        if key:
+            info[key] = {"fn": build_generic_template, "kwargs": dict(recipe)}
+
+    _SPEC_KEY_TO_BUILD_INFO = info
+    return info
+
+
+def render_document(session: DraftSession, spec: TemplateSpec,
+                    settings: TemplateSettings | None = None) -> Path:
     """The one render function every template uses. Replaces per-template
     render_work_order/render_mou-style duplication — those two now exist
-    only as thin backward-compatible wrappers around this."""
+    only as thin backward-compatible wrappers around this.
+
+    When `settings` is provided, the template .docx is dynamically rebuilt
+    with those settings (cover page, TOC, declarations, custom colours/
+    fonts/logos) before being rendered with docxtpl. When settings is None,
+    behaviour is unchanged — uses the pre-built static template."""
     if not session.is_complete():
         raise ValueError("Cannot render — clarifying questions are not fully answered yet.")
 
@@ -414,19 +741,224 @@ def render_document(session: DraftSession, spec: TemplateSpec) -> Path:
                          "Contractor": context.get("contractor_name", "")},
         )
 
+    # Technical Proposal's two diagrams (Solution & Technology Architecture,
+    # Data Flow Diagram) are structured input, not AI narrative text — see
+    # NarrativeField's docstring for why free-form prose can't lay out a
+    # diagram reliably. Popped from context (not real Jinja fields) so
+    # docxtpl doesn't choke on a value it was never meant to substitute;
+    # they're injected into the actual document after rendering instead.
+    #
+    # If the user left the raw field blank, the diagram is derived FROM the
+    # problem statement instead of requiring them to hand-author it — the
+    # explicit ask that drove this: "it should be able to make architecture,
+    # flow diagrams... accurately" from the proposal content, not just
+    # render whatever structure the user manually typed. Grounded in the
+    # SAME expanded narrative text already produced above (executive
+    # summary + understanding + objectives), not a fresh unrelated brief —
+    # keeps the diagram consistent with what the rest of the document
+    # actually says. Still goes through the same structured-line parser
+    # either way, so a manually-typed diagram and an AI-derived one are
+    # handled identically downstream.
+    generated_content = None
+    if spec.key == "technical_proposal":
+        problem_statement = "\n\n".join(filter(None, [
+            context.get("executive_summary"), context.get("understanding"),
+            context.get("objectives"),
+        ]))
+        known_facts = {"Client": context.get("client_name", ""),
+                       "Submitted By": context.get("submitted_by", "")}
+        project_title = context.get("project_title", "")
+
+        def _structured(field_name: str, instructions: str) -> str:
+            raw = context.pop(field_name, "")
+            if not raw.strip():
+                raw = _generate_structured_lines(instructions, project_title, problem_statement, known_facts)
+            return raw
+
+        raw_layers = context.pop("architecture_layers", "")
+        if not raw_layers.strip():
+            raw_layers = _generate_architecture_layers(project_title, problem_statement, known_facts)
+        diagram_layers = _parse_architecture_layers(raw_layers)
+
+        raw_steps = context.pop("data_flow_steps", "")
+        if not raw_steps.strip():
+            raw_steps = _generate_flow_steps(project_title, problem_statement, known_facts)
+        diagram_steps = _parse_flow_steps(raw_steps)
+
+        raw_timeline = context.pop("implementation_timeline", "")
+        if not raw_timeline.strip():
+            raw_timeline = _generate_timeline_phases(project_title, problem_statement, known_facts)
+        diagram_timeline = _parse_timeline_phases(raw_timeline)
+
+        # Every field below follows the same "leave blank to auto-derive
+        # from the problem statement" convention as the three diagrams
+        # above — see build_technical_proposal_template's docstring for
+        # why these are structured pipe-delimited lines, not free prose.
+        raw_sitemap = _structured("sitemap_pillars",
+            "Propose an information architecture for this website: 4-6 top-level navigation "
+            "pillars, each with 3-5 sub-pages.\n\nOutput ONLY lines in EXACTLY this format "
+            "(pipe-separated, two fields, sub-pages comma-separated within the second field):\n"
+            "Pillar Name | Sub-page one, Sub-page two, Sub-page three\n\n"
+            "Example: Home | Highlights, Latest news, Notices, Quick links\n\n"
+            "Be specific to what the problem statement actually describes. No preamble, no "
+            "numbering, no bullet points — just the lines, nothing else.")
+        sitemap_pillars = [(r[0], [i.strip() for i in r[1].split(",") if i.strip()])
+                           for r in _parse_pipe_rows(raw_sitemap, 2)]
+
+        raw_compliance = _structured("compliance_items",
+            "List 6-8 rows mapping key requirements implied by the problem statement to how "
+            "the proposed solution meets each one.\n\nOutput ONLY lines in EXACTLY this format "
+            "(pipe-separated, two fields):\nRequirement | Proposed solution\n\n"
+            "Example: Hosting in a MeitY-approved data centre in India | Deployment to an "
+            "approved provider with production environment, SSL and hardening\n\n"
+            "Be specific to what the problem statement actually describes. No preamble, no "
+            "numbering, no bullet points — just the lines, nothing else.")
+        compliance_items = [(r[0], r[1]) for r in _parse_pipe_rows(raw_compliance, 2)]
+
+        raw_modules = _structured("modules_features",
+            "List 6-10 modules/features of the public-facing website this solution delivers.\n\n"
+            "Output ONLY lines in EXACTLY this format (pipe-separated, two fields):\n"
+            "Module | What the user gets\n\nExample: News & Updates | Dated, paginated listing "
+            "with detail pages and attachments\n\nBe specific to what the problem statement "
+            "actually describes. No preamble, no numbering, no bullet points — just the lines, "
+            "nothing else.")
+        modules_features = _parse_pipe_rows(raw_modules, 2)
+
+        raw_core_flow = _structured("core_module_flow",
+            "Identify the single centrepiece module of this solution (the feature the whole "
+            "engagement exists to deliver) and describe the user's journey through it as 4-6 "
+            "short steps.\n\nOutput ONLY 4-6 steps, one per line, SHORT (2-5 words, like a "
+            "diagram box label). No preamble, no numbering (added automatically), no bullet "
+            "points — just the plain step text, one per line, nothing else.")
+        core_module_flow = _parse_flow_steps(raw_core_flow)
+
+        raw_admin_caps = _structured("admin_capabilities",
+            "List 4-6 capability areas of the admin CMS portal for this solution.\n\nOutput "
+            "ONLY lines in EXACTLY this format (pipe-separated, two fields):\n"
+            "Feature | Description\n\nExample: Content management | News, notices, tenders, "
+            "events and downloads, each with publish/expiry control\n\nBe specific to what the "
+            "problem statement actually describes. No preamble, no numbering, no bullet points "
+            "— just the lines, nothing else.")
+        admin_capabilities = _parse_pipe_rows(raw_admin_caps, 2)
+
+        raw_admin_roles = _structured("admin_roles",
+            "List 3-4 admin CMS user roles for this solution and what each can do.\n\nOutput "
+            "ONLY lines in EXACTLY this format (pipe-separated, two fields):\nRole | Can do\n\n"
+            "Example: Content Editor | Create and publish news, notices and events\n\nBe "
+            "specific to what the problem statement actually describes. No preamble, no "
+            "numbering, no bullet points — just the lines, nothing else.")
+        admin_roles = _parse_pipe_rows(raw_admin_roles, 2)
+
+        raw_enquiry = _structured("enquiry_channels",
+            "List 2-4 enquiry/contact form types this solution needs.\n\nOutput ONLY lines in "
+            "EXACTLY this format (pipe-separated, three fields):\nForm | Captured | Routed to\n\n"
+            "Example: General contact enquiry | Name, organisation, email, subject, message | "
+            "Admin portal + notification inbox\n\nBe specific to what the problem statement "
+            "actually describes. No preamble, no numbering, no bullet points — just the lines, "
+            "nothing else.")
+        enquiry_channels = _parse_pipe_rows(raw_enquiry, 3)
+
+        raw_security_flow = _structured("security_flow",
+            "Describe the security/hardening/certification pipeline this solution goes through "
+            "before go-live, as 4-6 short steps.\n\nOutput ONLY 4-6 steps, one per line, SHORT "
+            "(2-5 words, like a diagram box label). No preamble, no numbering (added "
+            "automatically), no bullet points — just the plain step text, one per line, "
+            "nothing else.")
+        security_flow = _parse_flow_steps(raw_security_flow)
+
+        raw_security_areas = _structured("security_areas",
+            "List 4-6 security/hosting/compliance areas this solution addresses.\n\nOutput ONLY "
+            "lines in EXACTLY this format (pipe-separated, two fields):\n"
+            "Area | What we implement\n\nExample: Application security | Server-side validation "
+            "on every input, CSRF tokens, secure session cookies, security headers\n\nBe "
+            "specific to what the problem statement actually describes. No preamble, no "
+            "numbering, no bullet points — just the lines, nothing else.")
+        security_areas = _parse_pipe_rows(raw_security_areas, 2)
+
+        raw_seo = _structured("seo_performance_items",
+            "List 5-8 multilingual/SEO/performance items relevant to this solution.\n\nOutput "
+            "ONLY lines in EXACTLY this format (pipe-separated, two fields):\nItem | Detail\n\n"
+            "Example: SEO-friendly URLs | Page titles & meta descriptions\n\nBe specific to what "
+            "the problem statement actually describes. No preamble, no numbering, no bullet "
+            "points — just the lines, nothing else.")
+        seo_performance_items = _parse_pipe_rows(raw_seo, 2)
+
+        raw_amc = _structured("amc_scope",
+            "List 3-5 annual maintenance & support scope areas for this solution once live.\n\n"
+            "Output ONLY lines in EXACTLY this format (pipe-separated, two fields):\n"
+            "Scope area | What's covered\n\nExample: Corrective maintenance | Bug fixes and "
+            "defect resolution within agreed SLAs\n\nBe specific to what the problem statement "
+            "actually describes. No preamble, no numbering, no bullet points — just the lines, "
+            "nothing else.")
+        amc_scope = _parse_pipe_rows(raw_amc, 2)
+
+        generated_content = {
+            "layers": diagram_layers, "flow_steps": diagram_steps, "timeline": diagram_timeline,
+            "project_title": project_title, "site_name": context.get("client_name", project_title),
+            "sitemap_pillars": sitemap_pillars, "compliance_items": compliance_items,
+            "modules_features": modules_features, "core_module_flow": core_module_flow,
+            "admin_capabilities": admin_capabilities, "admin_roles": admin_roles,
+            "enquiry_channels": enquiry_channels, "security_flow": security_flow,
+            "security_areas": security_areas, "seo_performance_items": seo_performance_items,
+            "amc_scope": amc_scope,
+        }
+
     doc_no = session.answers[spec.doc_number_field]
     version = _next_version(spec.filename_prefix, doc_no)
     context["version"] = f"v{version}"
     context = _escape_context(context)
 
-    tpl = DocxTemplate(TEMPLATES_DIR / spec.template_file)
-    tpl.render(context)
+    # ── Template selection: static (default) or dynamically rebuilt ──
+    # tmp_dir is cleaned up in the finally below — without that, every render
+    # with custom settings leaked a temp directory that was never removed.
+    tmp_dir = None
+    try:
+        if settings is not None:
+            # Dynamically rebuild the template with custom settings so cover
+            # page, TOC, declarations, colours, fonts, logos etc. all reflect
+            # the user's choices. The rebuilt template goes into a temp location
+            # to avoid overwriting the stored defaults.
+            import tempfile
+            build_info = _get_build_info()
+            info = build_info.get(spec.key)
+            if info:
+                # Temporarily redirect the build output into a temp dir
+                import scripts.build_templates as _bt
+                original_dir = _bt.TEMPLATES_DIR
+                tmp_dir = Path(tempfile.mkdtemp(prefix="qci_tpl_"))
+                _bt.TEMPLATES_DIR = tmp_dir
+                try:
+                    info["fn"](settings=settings, **info["kwargs"])
+                finally:
+                    _bt.TEMPLATES_DIR = original_dir
+                template_path = tmp_dir / spec.template_file
+            else:
+                # Fallback — spec not in the build map, use static template
+                template_path = TEMPLATES_DIR / spec.template_file
+        else:
+            template_path = TEMPLATES_DIR / spec.template_file
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    safe = re.sub(r"[^\w\-]", "_", doc_no)
-    out_path = OUTPUT_DIR / f"{spec.filename_prefix}_{safe}_v{version}.docx"
-    tpl.save(out_path)
-    return out_path
+        tpl = DocxTemplate(template_path)
+        tpl.render(context)
+
+        if spec.key == "technical_proposal":
+            # NOT tpl.get_docx() — that calls init_docx(reload=True), which
+            # RE-LOADS from the original template file whenever is_rendered
+            # is True (confirmed by reading docxtpl's source after this
+            # produced a fully unrendered document — every {{ field }}
+            # showed up as raw text). tpl.docx already holds the rendered
+            # document; use it directly.
+            _inject_generated_content(tpl.docx, generated_content, settings)
+
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        safe = re.sub(r"[^\w\-]", "_", doc_no)
+        out_path = OUTPUT_DIR / f"{spec.filename_prefix}_{safe}_v{version}.docx"
+        tpl.save(out_path)
+        return out_path
+    finally:
+        if tmp_dir is not None:
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 # ============================================================================
@@ -702,6 +1234,124 @@ PROPOSAL_COMBINED_SPEC = TemplateSpec(
     ),
 )
 
+# ---- Technical Proposal — modelled on Source Soft Solutions' own real
+# proposals (New Index/*.pdf) rather than invented; see
+# build_technical_proposal_template's docstring for exactly which real
+# section names/order this matches and which client-specific middle
+# sections were deliberately left out as inherently one-off per engagement.
+TECHNICAL_PROPOSAL_FIELDS = [
+    ("proposal_no", "What is the proposal number?", None),
+    ("proposal_date", "What is the proposal date?", str(date.today())),
+    ("client_name", "Who is this proposal for (client organisation)?", None),
+    ("project_title", "What is the project title?", None),
+    ("executive_summary_brief", "Briefly, summarise the overall proposal in a sentence or two. (this gets expanded)", None),
+    ("understanding_brief", "Briefly, what is your understanding of the client's requirement? (this gets expanded)", None),
+    ("objectives_brief", "Briefly, what outcomes will this engagement be measured against? (this gets expanded)", None),
+    ("compliance_summary_brief", "Briefly, how does your proposed solution meet the requirement? (this gets expanded)", None),
+    ("compliance_items",
+     "List requirement-to-solution rows, one per line, as 'Requirement | Proposed solution' "
+     "— or leave blank and this will be generated automatically from your problem statement above.", ""),
+    ("information_architecture_brief", "Briefly describe the information architecture / sitemap approach. (this gets expanded)", None),
+    ("sitemap_pillars",
+     "List your site's top-level navigation pillars, one per line, as "
+     "'Pillar Name | Sub-page one, Sub-page two, Sub-page three' — or leave blank and this "
+     "will be generated automatically from your problem statement above.", ""),
+    ("architecture_intro_brief", "Briefly introduce your solution's technical architecture in a sentence. (this gets expanded)", None),
+    ("architecture_layers",
+     "List your solution's architecture layers, one per line, as 'Layer Name: Description' "
+     "(e.g. 'Frontend: React SPA served via CDN') — or leave blank and this will be "
+     "generated automatically from your problem statement above.", ""),
+    ("data_flow_intro_brief", "Briefly introduce your primary data/process flow in a sentence. (this gets expanded)", None),
+    ("data_flow_steps",
+     "List the key steps in your primary process flow, one per line, in order "
+     "(e.g. 'User submits enquiry form') — or leave blank and this will be generated "
+     "automatically from your problem statement above.", ""),
+    ("modules_intro_brief", "Briefly introduce the public website's modules and features in a sentence. (this gets expanded)", None),
+    ("modules_features",
+     "List the public website's modules, one per line, as 'Module | What the user gets' — "
+     "or leave blank and this will be generated automatically from your problem statement above.", ""),
+    ("core_module_intro_brief", "Briefly introduce your solution's centrepiece module in a sentence. (this gets expanded)", None),
+    ("core_module_flow",
+     "List the user's journey through your solution's centrepiece module, one step per line "
+     "— or leave blank and this will be generated automatically from your problem statement above.", ""),
+    ("admin_portal_intro_brief", "Briefly introduce the admin CMS portal in a sentence. (this gets expanded)", None),
+    ("admin_capabilities",
+     "List the admin CMS portal's capability areas, one per line, as 'Feature | Description' "
+     "— or leave blank and this will be generated automatically from your problem statement above.", ""),
+    ("admin_roles",
+     "List the admin CMS user roles, one per line, as 'Role | Can do' — or leave blank and "
+     "this will be generated automatically from your problem statement above.", ""),
+    ("enquiry_intro_brief", "Briefly introduce how enquiries/contact forms are handled in a sentence. (this gets expanded)", None),
+    ("enquiry_channels",
+     "List enquiry/contact form types, one per line, as 'Form | Captured | Routed to' — or "
+     "leave blank and this will be generated automatically from your problem statement above.", ""),
+    ("security_intro_brief", "Briefly introduce your security, hosting and compliance approach in a sentence. (this gets expanded)", None),
+    ("security_flow",
+     "List the security/hardening/certification pipeline before go-live, one step per line "
+     "— or leave blank and this will be generated automatically from your problem statement above.", ""),
+    ("security_areas",
+     "List security/hosting/compliance areas, one per line, as 'Area | What we implement' — "
+     "or leave blank and this will be generated automatically from your problem statement above.", ""),
+    ("seo_intro_brief", "Briefly introduce your multilingual/SEO/performance approach in a sentence. (this gets expanded)", None),
+    ("seo_performance_items",
+     "List multilingual/SEO/performance items, one per line, as 'Item | Detail' — or leave "
+     "blank and this will be generated automatically from your problem statement above.", ""),
+    ("methodology_brief", "Briefly describe your implementation methodology and phases. (this gets expanded)", None),
+    ("implementation_timeline",
+     "List your implementation phases, one per line, as 'Phase Name | Week range | Description' "
+     "(e.g. 'Phase 1 — Discovery & Design | Weeks 1-3 | Kick-off and requirement study') — or "
+     "leave blank and this will be generated automatically from your problem statement above.", ""),
+    ("amc_intro_brief", "Briefly introduce your annual maintenance & support offering in a sentence. (this gets expanded)", None),
+    ("amc_scope",
+     "List annual maintenance & support scope areas, one per line, as 'Scope area | What's "
+     "covered' — or leave blank and this will be generated automatically from your problem "
+     "statement above.", ""),
+    ("deliverables_brief", "Briefly list key deliverables and any assumptions. (this gets expanded)", None),
+    ("submitted_by", "Submitted by (your organisation)?", "Source Soft Solutions"),
+    ("signatory_name", "Authorized signatory (name)?", None),
+    ("signatory_designation", "Their designation?", None),
+    ("about_company", "Company profile for the About the Company page? (leave blank to use Source Soft Solutions' real profile)", ""),
+]
+TECHNICAL_PROPOSAL_SPEC = TemplateSpec(
+    key="technical_proposal", display_name="Technical Proposal",
+    template_file="technical_proposal_template.docx", filename_prefix="technical_proposal",
+    doc_number_field="proposal_no", fields=TECHNICAL_PROPOSAL_FIELDS,
+    narrative_fields=(
+        NarrativeField("executive_summary_brief", "executive_summary", "executive summary", "technical proposal", ("project_title",),
+                       context_fields=("submitted_by", "client_name", "project_title")),
+        NarrativeField("understanding_brief", "understanding", "understanding of the requirement", "technical proposal", ("project_title",),
+                       context_fields=("submitted_by", "client_name", "project_title")),
+        NarrativeField("objectives_brief", "objectives", "project objectives", "technical proposal", ("project_title",),
+                       context_fields=("submitted_by", "client_name", "project_title")),
+        NarrativeField("compliance_summary_brief", "compliance_summary", "requirement-to-solution compliance", "technical proposal", ("project_title",),
+                       context_fields=("submitted_by", "client_name", "project_title")),
+        NarrativeField("information_architecture_brief", "information_architecture", "information architecture", "technical proposal", ("project_title",),
+                       context_fields=("submitted_by", "client_name", "project_title")),
+        NarrativeField("architecture_intro_brief", "architecture_intro", "technology architecture introduction", "technical proposal", ("project_title",),
+                       context_fields=("submitted_by", "client_name", "project_title")),
+        NarrativeField("data_flow_intro_brief", "data_flow_intro", "data flow introduction", "technical proposal", ("project_title",),
+                       context_fields=("submitted_by", "client_name", "project_title")),
+        NarrativeField("modules_intro_brief", "modules_intro", "public website modules and features introduction", "technical proposal", ("project_title",),
+                       context_fields=("submitted_by", "client_name", "project_title")),
+        NarrativeField("core_module_intro_brief", "core_module_intro", "centrepiece module introduction", "technical proposal", ("project_title",),
+                       context_fields=("submitted_by", "client_name", "project_title")),
+        NarrativeField("admin_portal_intro_brief", "admin_portal_intro", "admin CMS portal introduction", "technical proposal", ("project_title",),
+                       context_fields=("submitted_by", "client_name", "project_title")),
+        NarrativeField("enquiry_intro_brief", "enquiry_intro", "enquiry and notification handling introduction", "technical proposal", ("project_title",),
+                       context_fields=("submitted_by", "client_name", "project_title")),
+        NarrativeField("security_intro_brief", "security_intro", "security, hosting and compliance introduction", "technical proposal", ("project_title",),
+                       context_fields=("submitted_by", "client_name", "project_title")),
+        NarrativeField("seo_intro_brief", "seo_intro", "multilingual, SEO and performance introduction", "technical proposal", ("project_title",),
+                       context_fields=("submitted_by", "client_name", "project_title")),
+        NarrativeField("methodology_brief", "methodology", "implementation methodology", "technical proposal", ("project_title",),
+                       context_fields=("submitted_by", "client_name", "project_title")),
+        NarrativeField("amc_intro_brief", "amc_intro", "annual maintenance and support introduction", "technical proposal", ("project_title",),
+                       context_fields=("submitted_by", "client_name", "project_title")),
+        NarrativeField("deliverables_brief", "deliverables", "deliverables and assumptions", "technical proposal", ("project_title",),
+                       context_fields=("submitted_by", "client_name", "project_title")),
+    ),
+)
+
 WORK_ORDER_SPEC = TemplateSpec(
     key="work_order_services", display_name="Work Order — Services/Consultancy",
     template_file="work_order_template.docx", filename_prefix="work_order",
@@ -729,6 +1379,7 @@ MOU_SPEC = TemplateSpec(
 # directly; every template built after them goes through render_document()
 # + this registry instead.
 ALL_TEMPLATE_SPECS = [
+    TECHNICAL_PROPOSAL_SPEC,
     WORK_ORDER_SPEC, WORK_ORDER_GOODS_SPEC, WORK_ORDER_AMC_SPEC,
     MOU_SPEC, MOU_INTERNATIONAL_SPEC, MOU_INTERDEPT_SPEC,
     AGREEMENT_SERVICE_SPEC, AGREEMENT_CONSULTANCY_SPEC, AGREEMENT_LICENSING_SPEC,

@@ -1,10 +1,25 @@
-# Project Memory — QCI AI Knowledge Hub
+# Project Memory — Source Soft Solutions Drafting Platform
 
 Single source of truth for this project. If context is ever lost, read this file
 first — it should be enough to reconstruct everything: what this is, why
 decisions were made, what's built, what's broken, what's left.
 
-Last updated: 19 August 2026 (Pillar 2 gaps closed + all 12 drafting templates built).
+**Pivot, 24 Aug 2026 — full retarget from QCI to Source Soft Solutions,
+an explicit user decision.** This project began as a PoC built specifically
+for a real QCI government tender (still documented in full below, since the
+architecture and every guardrail were proven against that RFP's real
+requirements — none of that reasoning stopped being valid). It is now
+Source Soft Solutions' own drafting platform. Concretely: default branding
+(logo, navy #1F4E78, org name/address) across all 12 original templates
+changed from QCI to Source Soft Solutions' real identity; a 13th template
+(Technical Proposal) was added, modelled directly on 3 of Source Soft
+Solutions' own real proposals rather than invented — see the dedicated
+build-log entry below for what was benchmarked and how. QCI's own
+requirements (the 4 Pillars, the RFP text, the non-Chinese-origin
+reasoning) stay documented as-is below for historical/architectural
+context, not because they still define the product's purpose.
+
+Last updated: 24 August 2026 (Source Soft Solutions pivot — rebrand + Technical Proposal template with architecture/flow diagrams).
 
 ---
 
@@ -787,6 +802,604 @@ docker run -d --name qdrant -p 6333:6333 -v qdrant_storage:/qdrant/storage qdran
 - Scale-up plan for 10,000 docs/2TB is designed with **real measured data**
   now (21-doc corpus: 0.61 sec/chunk, ~7.6 days extrapolated single-threaded)
   but not implemented — current setup is single-machine, single-process
+
+---
+
+## 8b. The Source Soft Solutions pivot (24 Aug 2026) — full detail
+
+**Trigger.** User said "forget QCI" and pointed at `New Index/` — 3 real
+Source Soft Solutions technical proposals (CSIR Innovation Complex, ICAR-NRCC,
+NIGST), asking for the company's own identity throughout and for the agent
+to be able to produce architecture/flow diagrams. Confirmed scope with two
+questions before touching anything, given the size of the pivot: (1) full
+replacement of QCI identity, not an added brand option — confirmed; (2) which
+of the two real TOC structures found in the PDFs to standardise on
+(new-build vs. AMC/maintenance) — confirmed new-build (CSIR/ICAR-NRCC).
+
+**What was extracted from the real PDFs, not guessed** (same "benchmark
+against the real document" discipline as every other visual decision this
+project has made): the real logo (`assets/sourcesoft_logo.png`, extracted
+via `pymupdf` `get_images()`, 900×900 the highest-res copy found), the exact
+navy brand colour `#1F4E78` (via `get_text('dict')` span colour on
+"TECHNICAL PROPOSAL" and `get_drawings()` fill colour on the header rule —
+both independently confirmed the same hex), the 5-colour architecture-diagram
+palette (`get_drawings()` on NIGST p.7's layered-stack diagram), the real
+"About the Company" profile/leadership text (page 2 of all three, word for
+word), and the stable 8-section front-matter skeleton shared identically by
+CSIR and ICAR-NRCC (About the Company → Executive Summary → Understanding →
+Objectives → Compliance Matrix → Information Architecture → Solution &
+Technology Architecture → Data Flow Diagrams) — the client-specific middle
+sections (bespoke module lists, bilingual content models, etc.) were
+deliberately NOT hardcoded into the generic template, since they're
+inherently one-off per real engagement, not a reusable pattern.
+
+**Rebrand** (`generation/template_settings.py`, `scripts/build_templates.py`):
+`TemplateSettings` defaults and the renamed "Source Soft Solutions" built-in
+preset (was "QCI Branded" — the stale `qci_branded.json` preset file was
+deleted so it couldn't shadow the new default) now carry the real logo,
+navy, org name, and 3-office address. `_add_letterhead()` was restructured
+from one big pre-composed logo image (QCI's convention) to a side-by-side
+icon + live bold-navy org-name text (matches Source Soft Solutions' real
+header — their logo file is just the icon, with the name as a separate text
+run next to it, not baked into the raster). `scripts/demo_app.py` had 15
+literal "QCI"/"QCI Branded" UI strings — fixed all of them, including 5 that
+referenced the old preset name and would have thrown `FileNotFoundError` on
+click after the rename (real bug caught by grepping, not assumed fixed).
+
+**New capability: Technical Proposal template with real diagrams**
+(`build_technical_proposal_template()` + `TECHNICAL_PROPOSAL_SPEC`). Two
+diagram types, both structured input rather than AI narrative text — a
+diagram needs to know exactly how many boxes and what's in each, which
+free-form prose can't guarantee:
+- `_add_layered_architecture_diagram()` — stacked coloured-label / light-description
+  rows, matching NIGST's real "Solution & Technology Architecture" diagram
+  exactly. Driven by `architecture_layers`, a user-typed "Layer Name:
+  Description" per line.
+- `_add_flow_diagram()` — numbered process boxes joined by arrow glyphs,
+  matching the real "DFD Level 1" rows. Driven by `data_flow_steps`, one
+  step per line.
+
+**Three real bugs found building this, all confirmed by actually rendering
+and looking, not assumed fixed from the code:**
+1. **TOC rendered empty.** `_add_shaded_heading()`'s paragraphs had no
+   `w:outlineLvl`, and Word's `TOC \o "1-3"` field collects entries by
+   outline level, not by "looks like a heading." Fixed by adding
+   `w:outlineLvl` directly (not Word's built-in Heading style, which would
+   have overridden the custom bar colour/font) — `outline_level=None` on
+   the TOC's own heading so it doesn't list itself.
+2. **Cover page silently lost its page border and running header.**
+   `_add_section_break()` built a brand-new *empty* `w:sectPr` for the
+   section boundary — in Word's model a paragraph-level `sectPr` describes
+   the section *ending* there, so an empty one strips every section
+   property (border, header, margins) from every page before it. Confirmed
+   visually: page 4 had the border, page 1 didn't. Fixed by deep-copying
+   the real body `sectPr` instead of building an empty one.
+3. **`tpl.get_docx()` silently discarded the entire render.** Diagram
+   injection needs to edit the document after `tpl.render()`; calling
+   `tpl.get_docx()` for that access triggers docxtpl's `init_docx(reload=True)`,
+   which — confirmed by reading docxtpl's own source after this produced a
+   fully unrendered document, every `{{ field }}` back to raw text —
+   reloads fresh from the original template file whenever `is_rendered` is
+   True. Fixed by using `tpl.docx` directly (the already-rendered object;
+   `save()` persists that same object) instead of calling `get_docx()`.
+4. **Diagram table rows split mid-page**, fracturing box text across the
+   page boundary (confirmed visually: "1.0 Citizen submits form" literally
+   split, "form" landing on the next page). Word's default lets a table row
+   break across pages; fixed with `_disable_row_split()` (`w:cantSplit`,
+   not exposed as a high-level python-docx property) on every diagram row —
+   a row now either fits entirely on the current page or moves entirely to
+   the next.
+
+**Marker mechanism, worth remembering if this needs extending**: the two
+diagram placeholders in the template are literal text markers
+(`[[ARCHITECTURE_DIAGRAM]]`, `[[DATA_FLOW_DIAGRAM]]`), deliberately NOT
+`{{ }}` Jinja syntax — a `{{{{...}}}}`-style literal would be parsed by
+docxtpl's Jinja engine as a malformed tag and crash `render()`. Caught by
+reasoning through what Jinja would actually see in that string before ever
+running a real render, and switched to `[[ ]]` — not found by trial and
+error.
+
+**Verified end-to-end**, not just unit-level: full render with real
+multi-line architecture/flow-diagram input, converted to PDF, every page
+visually inspected — cover page, About the Company (real leadership bios),
+narrative sections, both diagrams intact on their own pages, signature
+block. Then a full regression pass confirmed the other 12 original
+templates (whose shared helpers — letterhead, section break, headings — all
+changed) still build and render correctly.
+
+**Follow-up, same day — diagrams now derived FROM the problem statement,
+not hand-typed.** User's explicit ask: "it should be able to make
+architecture, flow diagrams... accurately" from the proposal content, not
+require the user to manually author the diagram structure. `architecture_layers`
+/ `data_flow_steps` changed from required fields to optional (default `""`)
+— when left blank, `_generate_architecture_layers()` / `_generate_flow_steps()`
+derive the diagram FROM the already-expanded narrative context (executive
+summary + understanding + objectives, the same text the rest of the
+document uses), grounded with known_facts (client/submitted-by names),
+constrained to the exact structured line format the existing parser
+expects. Manual input still works if the user provides it — AI-generation
+is the fallback, not a replacement.
+
+Blocked mid-verification by a real, external condition: the Anthropic
+account hit `credit balance too low` (confirmed via a bare 10-token test
+call returning the identical error, not a code bug) — reported plainly
+rather than worked around, since silently downgrading models to dodge a
+billing block would hide the real signal from the user. Resumed once the
+user topped up and rotated the key (now `claude-sonnet-5`, their own model
+choice — the account switched from Opus to Sonnet, and the shared
+`llm_client.py` fallback-degradation logic built earlier already handles a
+model that doesn't support `fallbacks`, no code change needed).
+
+Verified for real with the topped-up key: rendered CICM's actual real
+engagement (client name + problem statement lifted from the real proposal
+this template was benchmarked against) with both diagram fields left
+blank. Confirmed visually — the AI-derived architecture correctly named
+layers like "Application/API Layer" and "Admin/CMS Layer" with descriptions
+specifically referencing "24 incubation labs" and "CICM staff," not
+generic filler, and the flow diagram correctly sequenced the real enquiry-
+handling process. One real polish issue caught from that same visual
+check: the model's first attempt wrote flow-diagram steps as full
+sentences ("The user fills out and submits the enquiry form on the
+public-facing website"), making oversized diagram boxes — tightened the
+prompt to explicitly require 2-5 word phrases ("these render as boxes in a
+flow diagram, and a long phrase makes an oversized box"); re-verified the
+retry produced consistent 3-word steps, still scenario-specific.
+
+**Second follow-up, same day — 5 real layout bugs from a real generated PDF
+the user downloaded and inspected (not from my own testing).** User gave a
+real file path (`C:\Users\...\Downloads\technical_proposal_SSS_PROP_2026_003_v1.pdf`)
+plus a reference screenshot of Source Soft Solutions' real footer — read
+both directly rather than guessing at the complaints. All 5 confirmed and
+fixed:
+
+1. **TOC rendered as raw placeholder text**, not an actual table of
+   contents. Word's TOC field only computes when told to (F9, or "update
+   fields on open"). Fixed with `w:updateFields` in `word/settings.xml`
+   (added in `_set_body_font`, so it applies to all 13 templates) — makes
+   Word auto-refresh TOC/PAGE/NUMPAGES the moment it opens the file, which
+   also fixes it for docx2pdf's PDF export since that goes through real
+   Word via COM automation.
+2. **"About the Company" overflowed onto an orphan page** — "Vikram Sharma
+   — Solutions Lead" stranded as a bare heading at the bottom of one page,
+   his bio alone on the next. Root cause was accumulated default paragraph
+   spacing across ~15 separate one-line paragraphs (profile text, 8
+   bullet deliverables, 3 leadership entries). Fixed two ways: the
+   deliverables list is now a 2-column grid (also matches the real
+   reference layout exactly, not just a spacing fix), and every paragraph
+   on the page uses a new `_tight()` helper (trims `space_after`) — plus
+   `w:keepNext` on each leadership name+bio pair as defense in depth.
+3. **Both diagrams looked bad**: the architecture diagram split
+   mid-diagram across a page boundary (last 2 of 6 layers stranded on the
+   next page before "7. Data Flow Diagram", an ugly gap), and the flow
+   diagram's boxes wrapped awkwardly (`cols_per_row=4` gave each box only
+   ~2.8cm — even 3-word phrases wrapped 2-3 lines). Fixed: a new
+   `_keep_row_with_next()` helper (`w:keepNext` on every paragraph in a
+   row's cells) applied to all-but-the-last row of both diagram tables —
+   `cantSplit` alone only stops a row breaking *within* itself, not the
+   table breaking *between* rows. Flow diagram also dropped to 3 boxes per
+   row (from 4) with explicit `Cm(4.2)` box / `Cm(0.9)` arrow column
+   widths and `table.autofit = False` (fixed layout, not content-based
+   autofit) — autofit was producing inconsistent column widths across
+   otherwise-identical columns.
+4. **Letterhead logo/name misaligned** on every body page — the org name
+   rendered shifted away from the logo rather than sitting beside it as a
+   lockup. Root cause: the 2-column table had `autofit = True` with only
+   the first column's width set; Word's real autofit re-flowed the second
+   column to something close to the full remaining page width when opened
+   in actual Word (python-docx's own rendering doesn't show this — only
+   caught because the user opened the real exported PDF). Fixed with
+   explicit widths on BOTH columns, `autofit = False`, and
+   `WD_ALIGN_VERTICAL.CENTER` on both cells so the single-line name sits
+   level with the taller logo image instead of pinned to the top.
+5. **Footer didn't match Source Soft Solutions' real proposal footer** —
+   was reusing the other 12 templates' generic "Ref: X | Version | Page
+   N of M" line. User's reference screenshot showed their real footer: a
+   3-column office block (New Jersey HQ / Dubai / Noida, each with
+   address + phone) under a rule, then a contact/confidentiality line with
+   the page number. Built a new `_add_technical_proposal_footer()`
+   specific to this template (the other 12 keep the Ref/Version/Page
+   convention — that's still correct for signed legal instruments, this is
+   a proposal, where the real document uses this format instead) — hit a
+   real bug building it: used `doc.add_table()` instead of
+   `footer.add_table()`, which appends to the main document BODY
+   regardless of what section is conceptually being built (python-docx has
+   no notion of "currently in a footer") — confirmed from a real render,
+   where the entire 3-office block landed on the LAST page of the
+   document, after the signature block, while the footer stayed a single
+   bare line. `footer.add_table()` also needs an explicit `width=` argument
+   unlike `Document.add_table()`, which derives one from page margins
+   automatically.
+
+**One regression caught and fixed within this same round**: the new
+footer's extra height (3-office block + contact line, ~6 lines vs. the
+old single line) shrank every page's usable body height enough that the
+cover page's own content spilled a near-empty line onto page 2, pushing
+TOC to start on page 3 instead of page 2 — a genuinely new blank page that
+wasn't there before. Caught by re-inspecting the fixed render rather than
+assuming the fix was complete once each individual issue looked right in
+isolation. Fixed by trimming the cover page's blank spacer paragraphs
+(`_tight()` again, plus removing one redundant top spacer).
+
+All 5 fixes plus the regression re-verified visually against a real
+generated PDF (not just python-docx's report that it saved successfully):
+TOC now shows real section names and page numbers, About the Company
+fits entirely on one page with all 3 leadership entries intact, both
+diagrams render as complete single-page units with no wrapping, the
+letterhead logo and org name sit correctly aligned, and the footer matches
+the real reference on every page. Per an explicit user instruction this
+round, only the Technical Proposal was regenerated as a real document —
+the other 12 templates were rebuilt as scaffolding (`build_templates.py` +
+`check_template_coverage.py`, both clean) but not rendered/filled, so
+their real-world rendering after the shared `_add_letterhead`/`_set_body_font`
+changes remains to be visually re-confirmed.
+
+### Third follow-up (24 Aug 2026) — image-based diagrams, leadership photos, Opus
+
+User showed 5 reference images (sitemap, layered-architecture, DFD L0/L1,
+a module-feature table, a phase timeline) as the visual bar to hit, and
+asked for: (1) leadership photos on the About page, (2) genuinely
+accurate/good-looking diagrams, (3) Claude Opus for content generation,
+(4) a cost estimate, (5) more pictorial content generally (tables,
+diagrams, wireframes) throughout the draft.
+
+**Root cause of "diagrams are bad as hell" even after the prior fix
+round**: they were Word tables with shaded cells — no real borders per
+box, no arrowheads, unreliable wrapping. A table can only ever look like
+a flat colored grid, not a real boxes-and-arrows diagram. Fixed by adding
+`generation/diagram_render.py`, a new standalone module that renders
+diagrams via matplotlib to PNG (rounded "card" boxes with a colored left
+accent bar, wrapped description text, `FancyArrowPatch` arrows with real
+arrowheads) and embeds them as pictures using the same `add_picture`
+pattern the logo already used — `matplotlib` added to `requirements.txt`
+(wasn't a dependency before). All layout math is done in "inches as data
+units" (`ax.set_xlim(0, fig_w)` with `fig.add_axes([0,0,1,1])`) so the
+saved PNG's aspect ratio is exact and callers only need to set width in
+the docx; height follows automatically.
+
+Three diagrams: `render_architecture_diagram` (vertical stack of layer
+cards, arrows between), `render_flow_diagram` (numbered process boxes,
+wraps to further rows), `render_timeline_diagram` (phase cards with a
+week-range header — brand new, no prior equivalent existed). Also
+`render_initials_avatar` for leadership photo placeholders.
+
+**Bug found and fixed while building the flow-diagram row-wrap
+connector**: first attempt used `FancyArrowPatch(connectionstyle="angle,
+angleA=0,angleB=90,rad=6")` for the elbow between the last box of one row
+and the first box of the next. `rad=6` is enormous relative to the
+diagram's inch-scale coordinates (whole diagram is ~7×3 inches) — the
+corner-rounding radius swallowed the entire path and the arrow rendered
+in the wrong place (appeared as a vertical line under column 0 instead of
+connecting the actual two boxes). Caught by rendering a standalone test
+image and visually inspecting it before wiring into the real pipeline —
+same "verify before integrating" discipline as everything else in this
+project. Fixed by dropping the "angle" connection style entirely in favor
+of a plain straight-line arrow between the two box centers
+(`_diagonal_arrow`) — simpler, no `rad` tuning needed, and unambiguous.
+
+**Wiring changes**: `build_templates.py`'s `_add_layered_architecture_diagram`/
+`_add_flow_diagram` now take the marker *paragraph* directly (not `doc`)
+and embed the rendered PNG straight into it, replacing the old
+"grab `doc.tables[-1]` and reposition the XML node" trick that only
+worked for tables. New `_add_timeline_diagram` follows the same pattern.
+`drafting.py`'s `_inject_diagrams` signature grew a `timeline_phases`
+param; new `_generate_timeline_phases`/`_parse_timeline_phases` pair
+mirrors the existing architecture/flow generate+parse functions exactly
+(same "derive from problem statement, structured pipe-delimited output"
+approach), except pipe-delimited (`Phase Name | Week range | description`)
+rather than colon-delimited, since a timeline description is free prose
+that legitimately contains colons. New `[[TIMELINE_DIAGRAM]]` marker
+added after the `{{ methodology }}` paragraph in section 8. New optional
+`implementation_timeline` field in `TECHNICAL_PROPOSAL_FIELDS` (blank →
+auto-generated, same convention as the other two).
+
+**Leadership photos**: `_resolve_leadership_photo()` in
+`build_templates.py` looks for a real file at
+`assets/leadership/<slug>.(jpg|jpeg|png)` (slug = lowercased name with
+spaces→underscores, e.g. `alok_dharayan.jpg`) and uses it if present;
+otherwise generates a navy-circle initials placeholder via
+`render_initials_avatar`. No real photos of Source Soft Solutions'
+leadership exist anywhere in this repo — what renders today is the
+placeholder. Each leadership entry changed from plain paragraphs to a
+borderless 2-column table (photo | name+bio), same construction pattern
+as `_add_letterhead`'s logo/name row, with `_disable_row_split` +
+`_keep_row_with_next` so a card can't be split or stranded across a page
+boundary. Verified visually: About the Company page still fits on one
+page with all 3 photo cards intact.
+
+**Claude Opus**: `config.py` already defaulted `ANTHROPIC_MODEL` to
+`claude-opus-5`, but `.env` was pinned to `claude-sonnet-5` (from the
+earlier context-window/credit-conservation period) — that's the actual
+override in effect. Changed `.env` to `claude-opus-5`. This is a single
+global switch (`llm_client.chat()` has no per-call model override) — it
+affects every LLM call in the app, not just proposal drafting.
+
+**Cost estimate given to the user** (from a live pricing search, not
+memorized numbers — Opus 5: $5/M input, $25/M output tokens; Sonnet 5:
+$2/M input, $10/M output): a full Technical Proposal draft makes ~12-15
+LLM calls (one per narrative section + diagram-content generation), at
+roughly ~2K input / ~600 output tokens per call → about $0.15/proposal on
+Sonnet vs ~$0.35-0.40/proposal on Opus. The user's existing account
+recharge covers hundreds of drafts either way.
+
+**Explicitly scoped OUT of this round** (flagged to the user, not
+silently dropped): a real sitemap/information-architecture tree diagram
+for section 5 (currently still plain `{{ information_architecture }}`
+text), proper DFD notation with distinct external-entity/process/data-store
+shapes (the flow diagram is still a linear numbered chain, not true DFD
+Level 0/Level 1 structure), and a "Modules & Features" table section
+(seen in the reference images but not part of the current template's
+section skeleton at all). These are new content/structure, not fixes to
+what exists, and were judged too large to fold into this same pass.
+
+Verified end-to-end: rendered the same NIGST scenario used in prior
+rounds with hand-typed structured diagram input (fast/free), confirmed
+visually via PDF — About page (photos + one-page fit), architecture
+diagram, flow diagram (including the fixed row-wrap connector), timeline
+diagram, TOC, and footer all correct across 10 pages. Separately
+confirmed the AI-derivation path works end-to-end on Opus: a live
+`_generate_timeline_phases()` call produced correctly-parseable
+pipe-delimited output.
+
+### Fourth follow-up (24 Aug 2026) — real leadership photos + full 17-section
+### template rebuild against the real reference PDF
+
+User provided 3 real headshot photos (pasted into chat, found via a
+Windows temp-file/screenshot search since there's no direct
+"save pasted image" tool — `C:\Users\ashut\Pictures\Screenshots\Screenshot
+2026-08-24 17011*.png`, matched to Alok Dharayan/Vijay Konar/Vikram Sharma
+by timestamp order) and copied them to `assets/leadership/<slug>.png`
+(`alok_dharayan.png`, `vijay_konar.png`, `vikram_sharma.png` — slug =
+lowercased name, spaces→underscores, matching `_resolve_leadership_photo`'s
+lookup exactly). These are picked up automatically on the next render —
+no code change needed, `_resolve_leadership_photo()` already checked for
+real files before falling back to the initials placeholder.
+
+**The bigger ask**: user said most of the document is still prose, not
+tabular/pictorial, and pointed at `New Index/CSIR_Innovation_Complex_
+Technical_Proposal.pdf` — "all the fields mentioned here should come in
+drafts... everything... tabular, mocks, diagrams". Extracted the real
+document's full structure (`pymupdf`, regex for numbered headings): **17
+sections**, not the 9 this template had. Missing entirely: section 4's
+Compliance Matrix was prose (should be a real table), section 5's
+Information Architecture had no sitemap diagram, and sections 8-14 and 16
+(Modules & Features, a core-module walkthrough, Admin CMS Portal,
+Enquiry & Notification, Security/Hosting/Compliance, Multilingual/SEO,
+**UI Design Concepts & Mock Screens**, Annual Maintenance) didn't exist
+in the template at all. Section 14 is literally wireframes/mockups —
+directly what "no wireframes" was pointing at.
+
+**Generalizing client-specific real content**: the real doc's section 9
+is "The 24 Incubation Labs Module" (CICM-specific); this template can't
+hardcode that for every client, so it became a generic "9. Core Platform
+Module" — the same *shape* (a centrepiece-module user-journey flow
+diagram) with content derived per-engagement instead of copied from CICM.
+Same treatment for Admin CMS roles, security certifications, etc. — the
+structure is real, the specific content is generated per problem
+statement.
+
+**New rendering infrastructure** (`generation/diagram_render.py`):
+- `render_sitemap_diagram(site_name, pillars, ...)` — title bar, down
+  arrow, N pillar columns each with a bulleted sub-page list. Matches the
+  reference's Information Architecture diagram almost exactly.
+- `render_ui_mockup(kind, heading, ...)` — a low-fidelity browser-frame
+  wireframe. `kind="public_home"`: chrome bar, nav, hero with 2 CTA
+  buttons, 3-card row (icon-circle + placeholder text-line bars).
+  `kind="admin_dashboard"`: sidebar nav, 4 stat cards, a table skeleton.
+  This is genuinely new ground — nothing like it existed before; it's
+  what section 14 (UI Design Concepts & Mock Screens) embeds.
+- `build_templates.py` gained 4 new generic helpers used across most of
+  the new sections rather than one bespoke function per section:
+  `_add_data_table` (navy-header striped Word table — compliance matrix,
+  modules table, roles table, enquiry table, security table, SEO table,
+  AMC table all reuse this one function), `_add_feature_grid` (bordered
+  tile grid — admin capabilities), `_add_sitemap_diagram_image`,
+  `_add_ui_mockup_image` (both wrap `_embed_diagram_image`, same pattern
+  as the existing architecture/flow/timeline diagrams).
+
+**Two real bugs found and fixed while building this, both caught by
+rendering standalone test images before wiring into the real pipeline —
+same discipline as every fix this project has made**:
+1. **matplotlib/freetype silently drops text below ~8pt at 200dpi with
+   this font** — the admin-dashboard mockup's stat-card labels
+   ("Enquiries", "Content Items", "Pending") rendered as nothing at all,
+   and "Uptime" rendered as a stray "ti" fragment (the middle of the
+   word — an edge-of-failure case, not fully dropped). Root cause
+   isolated with a minimal reproduction (varying only fontsize) — sizes
+   8/9.5/12 rendered fine, 6.8 silently vanished. No matplotlib
+   warning/error is raised; it just doesn't draw. Fixed by auditing every
+   `fontsize=` in `diagram_render.py` and raising anything under 8.0pt.
+   Take-away for any future diagram work in this module: **never go below
+   8pt**, regardless of how cramped a label seems — it won't just look
+   small, it will disappear.
+2. **UI mockup nav bar / hero heading overlapped with long project
+   titles** — a real title like "CSIR Innovation Complex Website
+   Redevelopment & Incubation Portal" (67 chars) ran straight into the
+   nav's "Home" item, and the hero "Welcome to {heading}" line extended
+   past its box on one unwrapped line. Fixed with a `_truncate()` helper
+   for the nav-bar brand text and chrome-bar URL slug (hard character
+   limits — there's no room to wrap in a single nav bar row), and
+   `_wrap()` (existing helper) for the hero heading, which has room to
+   become 2 lines — with the placeholder body-text and CTA buttons
+   below it repositioned to key off the actual wrapped-heading height
+   instead of a fixed offset, so they don't collide when the heading
+   wraps.
+
+**Field/content wiring** (`generation/drafting.py`): added
+`_generate_structured_lines()` — one shared driver for every new
+"derive structured content from the problem statement" field, taking
+task-specific instructions text as a parameter, rather than 11 near-
+duplicate `_generate_*` functions (the pattern the original three
+diagrams established). Paired with `_parse_pipe_rows()`, a shared
+pipe-delimited parser (pipe, not colon, since these descriptions
+legitimately contain colons — same reasoning as the timeline phases
+parser). 11 new structured fields (`compliance_items`,
+`sitemap_pillars`, `modules_features`, `core_module_flow`,
+`admin_capabilities`, `admin_roles`, `enquiry_channels`,
+`security_flow`, `security_areas`, `seo_performance_items`,
+`amc_scope`) and 7 new narrative `_brief` fields (one prose intro per
+new section) added to `TECHNICAL_PROPOSAL_FIELDS`, all following the
+established "leave blank to auto-generate" convention. `_inject_diagrams`
+renamed to `_inject_generated_content` and rewritten to take one
+`content` dict instead of a positional arg per diagram — the old
+per-diagram-argument signature doesn't scale to 16 markers ((3 original
+diagrams + sitemap + 2 mockups + 2 flow diagrams) as images, (7 tables +
+1 feature grid) as native Word tables inserted the same way the original
+table-based diagrams used to be, before they were switched to images).
+
+**Cost impact**: roughly doubled the number of LLM calls per Technical
+Proposal draft (~12-15 → ~25-30, one per brief + one per structured
+field that's left blank), so the per-document Opus cost estimate from
+the previous round (~$0.35-0.40) roughly doubles too (~$0.70-0.80) — see
+[[cost estimate note above]] for the underlying per-token pricing. Still
+cents per document.
+
+Verified end-to-end: rendered a full CSIR Innovation Complex example
+(the same scenario as the reference PDF) with hand-typed structured
+content for every new field (fast/free — avoids re-paying for LLM calls
+on every verification pass) but real Opus-generated prose for all 23
+narrative brief fields. Confirmed visually via an 18-page PDF: all 17
+TOC entries with correct real page numbers, compliance matrix (5 rows,
+correct columns/shading), sitemap diagram (5 pillars, bulleted
+sub-items), modules table, core-module flow diagram, admin CMS feature
+grid + roles table, enquiry table, security flow diagram + table, SEO
+table, both UI mockups (post-fix, no overlap), timeline diagram, AMC
+table, and the final deliverables page — every new section renders
+correctly and matches the reference document's structure. Output:
+`data/generated/technical_proposal_SSS-PROP-2026-011_v2.docx`.
+
+**Not done this round** (true DFD notation with distinct entity/process/
+data-store shapes, rather than the current linear numbered-box chain
+reused for both the original Data Flow Diagram and the new core-module/
+security flows) — the reference document's actual DFD Level 0/Level 1
+notation (external entities as separate boxes, numbered processes,
+labelled data stores, directional flow) is a different diagram grammar
+than the "numbered chain" this template uses everywhere; flagged, not
+attempted, given how much else this round already covered.
+
+### Real production failure (24 Aug 2026) — 529 Overloaded crashed the app mid-draft
+
+User ran the app themselves (`streamlit run scripts/demo_app.py`, filling
+in a Technical Proposal by hand from the walkthrough example given
+above) and hit `anthropic.OverloadedError: 529 Overloaded` on one of the
+~25-30 sequential LLM calls a full draft now makes (grew from ~12-15
+after the 17-section rebuild — more calls means more surface area for
+hitting a transient overload mid-run). This crashed the whole Streamlit
+app to a raw Python traceback — bad on its own, worse because it happens
+after 20+ already-succeeded, already-paid-for LLM calls get thrown away
+with no way to resume mid-draft.
+
+Two-part fix:
+1. **`generation/llm_client.py`**: added `_call_with_retry()` — wraps
+   both `client.beta.messages.create` and the plain-fallback
+   `client.messages.create` calls with exponential backoff + jitter (5
+   attempts, base delay 2s) on `anthropic.APIStatusError` where
+   `status_code` is in `{429, 500, 502, 503, 529}`, and on
+   `anthropic.APIConnectionError` unconditionally. Anything else (400
+   bad request, refusal, auth) raises immediately on the first attempt —
+   retrying a permanent failure just wastes time reproducing it. Verified
+   against the real anthropic SDK's exception hierarchy
+   (`venv/Lib/site-packages/anthropic/_exceptions.py`): `OverloadedError`
+   is a real `APIStatusError` subclass with `status_code=529` (confirmed
+   by reading the source, not assumed), so `except APIStatusError as e:
+   e.status_code` reliably catches it. Tested with a mocked flaky client
+   (real `httpx2.Response` objects, not hand-faked): retry-then-succeed,
+   non-retryable-raises-immediately, and exhausts-then-raises all
+   verified correct before touching the real pipeline.
+2. **`scripts/demo_app.py`**: wrapped the `render_fn(session)` call (the
+   one that had crashed) in try/except — on failure, shows `st.error(...)`
+   with a readable message and `st.stop()`, instead of Streamlit's raw
+   traceback page. Collected answers survive a failed render (they live
+   in `st.session_state`, untouched by the exception), so the user can
+   just click Generate again — the retry wrapper above should make that
+   rarely even necessary now, but this is the backstop for when retries
+   are exhausted or a genuinely different error occurs.
+
+### Real production bug (24 Aug 2026) — stale preset JSON files still had QCI branding
+
+User rendered a real Technical Proposal via the Streamlit app and got
+"Quality Council of India" in the letterhead and a completely missing
+About the Company section (`technical_proposal_SSS_PROP_2026_003_v1.pdf`
+— note underscores in the proposal number, meaning the user typed this
+directly into the webpage, not one of my hyphenated example scenarios).
+
+**Root cause**: `data/template_presets/dark_mode.json`,
+`executive_crimson.json` and `light_mode.json` had been materialised to
+disk back when their in-code factory functions (`_dark_mode()` etc. in
+`generation/template_settings.py`) still set
+`organisation_name="Quality Council of India"` — before the Source Soft
+Solutions rebrand. The dataclass default and every factory's definition
+were fixed correctly months ago (`organisation_name: str = "Source Soft
+Solutions"`), but `load_preset()` checked for an existing JSON file
+FIRST and returned it verbatim if found, never re-deriving from the
+current (correct) in-code factory. So the code fix silently stopped
+applying to these 3 built-in presets the moment each was first loaded
+once, pre-rebrand — with no error, no warning, just quietly wrong output
+forever after. `_add_about_company_page()` only renders real About-page
+content when `settings.organisation_name.strip().lower() ==
+"source soft solutions"` (falls back to an empty/near-empty page
+otherwise, by design — see the Source Soft Solutions pivot notes — since
+Source Soft's real bios shouldn't be attributed to a different org) — so
+one stale field explains both symptoms the user saw in a single root
+cause.
+
+The user must have visited the Template Settings tab and loaded one of
+Dark Mode/Light Mode/Executive Crimson (or it stayed selected in
+`st.session_state["template_settings"]` from earlier in their session)
+before drafting — a render with `settings=None` (never touched Template
+Settings at all) was NOT affected, since that path uses
+`TemplateSettings()`'s own (correct) dataclass default directly, with no
+JSON file in the loop at all.
+
+**Fix**: `load_preset()` now checks `if name in _BUILTIN_FACTORIES`
+FIRST and always returns a fresh call to the in-code factory for any
+built-in preset name — a stale (or absent) JSON file is irrelevant for
+built-ins, closing the whole bug class rather than just this one
+instance (the on-disk cache is still refreshed via `save_preset()` after,
+harmless, just keeps it in sync for inspection). User-created custom
+presets (any name not in `_BUILTIN_FACTORIES`) are unaffected — those
+still load from their JSON file, since a user's saved customisation has
+no in-code fallback and should persist exactly as they left it. Confirmed
+via `demo_app.py`'s actual preset-loading UI flow (`ensure_builtin_presets()`,
+the quick-preset buttons, "Save Preset" always prompts for a new name) that
+this change can't silently discard a real user customisation — built-ins
+were never meant to be edited-and-saved-in-place through the UI.
+
+**Verified with zero API cost**, given the user's explicit "$5 total,
+testing costs money" constraint: monkey-patched `drafting._llm_chat` to
+return canned text (no real Anthropic calls), rendered a full Technical
+Proposal under the previously-buggy "Dark Mode" preset, converted to PDF,
+and confirmed visually — letterhead and cover page now say "Source Soft
+Solutions" (not QCI), the About the Company page is fully present
+including the real leadership photos (added earlier this session), and
+Dark Mode's actual custom styling (navy/black heading bars, blue accent)
+still renders correctly — the fix corrected only the stale field, nothing
+else about the preset's intended look changed. This "stub the LLM,
+verify structure for free" pattern is worth reusing for any future
+structural-only fix — full narrative-quality checks still need a real
+Opus call, but layout/branding/data-wiring bugs like this one don't.
+
+### UI mockups were generic, not project-specific (24 Aug 2026)
+
+User asked directly: "in section 14... will the image generated will be
+same?" Honest answer at the time was yes — `render_ui_mockup()`'s nav
+items ("Home/About/Services/News/Contact"), admin sidebar menu
+("Dashboard/Content/Media/Users & Roles/Settings") and stat-card layout
+were all hardcoded, identical on every render regardless of project; only
+the title text and accent colour varied. Fixed by adding optional
+`nav_items`/`cards` (public_home) and `sidebar_items` (admin_dashboard)
+parameters to `render_ui_mockup()`, wired through
+`_add_ui_mockup_image()` (build_templates.py) and
+`_inject_generated_content()` (drafting.py) from data ALREADY being
+generated for other sections — `sitemap_pillars` → nav items,
+`modules_features` → the 3 feature-card labels, `admin_capabilities` →
+sidebar items — no new fields needed, just reusing what section 8/10 and
+the sitemap diagram already produce. Falls back to the original generic
+content when nothing is passed (keeps standalone/manual calls to
+`render_ui_mockup` working). Verified free (stubbed `_llm_chat` again):
+a test project with "Certificate Verification / Notices Board / Training
+Partners" as its modules now shows exactly those as the mockup's feature
+cards, and its admin capabilities as the sidebar items — confirmed via
+rendered PDF.
 
 ---
 

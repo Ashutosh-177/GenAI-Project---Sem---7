@@ -1,4 +1,4 @@
-"""Smoke test for all 12 templates — renders each with realistic sample
+"""Smoke test for all 13 templates — renders each with realistic sample
 answers and reports pass/fail per template without stopping on the first
 failure, so one broken template doesn't hide the status of the other 11.
 This is NOT the same depth of adversarial testing the first two templates
@@ -85,6 +85,15 @@ SAMPLE_VALUES = {
     "total_value": "Rs. 45,00,000", "validity_period": "120 days",
     "executive_summary_brief": "a comprehensive digital upgrade proposal combining infrastructure modernisation with staff training",
     "approach_and_cost_brief": "phased rollout over 6 months with costs allocated proportionally to each phase's scope",
+    "understanding_brief": "the client needs a modern, scalable citizen-facing portal that integrates with existing government identity systems",
+    "compliance_summary_brief": "our solution addresses every requirement in the tender scope of work through a phased delivery plan",
+    "information_architecture_brief": "a three-tier sitemap covering citizen services, training provider onboarding, and administrative reporting",
+    "architecture_intro_brief": "the solution follows a modern layered architecture deployed on AWS",
+    "architecture_layers": "Frontend: React SPA served via CloudFront CDN\nSecurity: WAF, OAuth2, rate limiting\nBackend: Node.js REST API on ECS\nData: PostgreSQL on Amazon RDS with daily backups",
+    "data_flow_intro_brief": "the enquiry submission flow validates and stores every citizen request before any notification is attempted",
+    "data_flow_steps": "Citizen submits form\nValidate input and check for spam\nPersist to database\nQueue notification",
+    "methodology_brief": "a five-phase delivery approach covering discovery, design, build, testing, and handover with formal gates",
+    "about_company": "",
 }
 
 
