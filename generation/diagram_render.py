@@ -18,6 +18,7 @@ height from the image's own aspect ratio.
 """
 from __future__ import annotations
 
+import colorsys
 import textwrap
 import warnings
 from pathlib import Path
@@ -28,11 +29,6 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Circle, Rectangle
 from matplotlib.font_manager import FontProperties
 
-# Palette cycled through by index — same navy-led, professional-report
-# tones used across the rest of the template (see _DIAGRAM_LAYER_COLOURS
-# in build_templates.py; kept as an independent constant here since this
-# module has no dependency on build_templates).
-_PALETTE = ["1F4E78", "2E6BA3", "BF382A", "2E7D45", "2E86AB"]
 _BODY_FILL = "F5F7FA"
 _BORDER = "D0D5DD"
 _TEXT_DARK = "1A1A1A"
@@ -43,10 +39,52 @@ def _hex(h: str) -> str:
     return f"#{h}"
 
 
+def _derive_palette(accent_hex: str, n: int = 5) -> list[str]:
+    """A small set of coordinated colours derived from `accent_hex` instead
+    of the fixed literal palette this used to be — a real user reported
+    "light mode and dark mode is not working properly", and the actual bug
+    was every diagram/mockup card colour being hardcoded to the same navy/
+    red/green regardless of which preset was active. A Dark Mode render's
+    section headings correctly turned near-black with a bright-blue
+    accent, but the sitemap's pillar headers and the flow diagram's boxes
+    stayed the old default navy — visually unrelated to the rest of the
+    page.
+
+    Monochromatic by design — same hue as `accent_hex`, only lightness
+    varied — rather than rotating hue: a first version that also shifted
+    hue produced neon, off-brand-looking swatches (bright cyan, magenta)
+    for saturated accents like Dark Mode's blue, since a wide hue rotation
+    at high saturation has no guarantee of landing somewhere that still
+    reads as "part of the same colour family." Varying only lightness
+    guarantees every swatch is visibly a shade of the SAME colour as the
+    rest of the theme, which is what "belongs to this preset" actually
+    means visually."""
+    r, g, b = (int(accent_hex.lstrip("#")[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    base_l = min(max(l, 0.22), 0.40)  # anchor away from extremes so every shift stays legible
+    light_shifts = [0.0, -0.08, 0.07, -0.14, 0.13][:n]
+    palette = []
+    for dl in light_shifts:
+        nl = min(max(base_l + dl, 0.16), 0.50)  # keep dark enough for reliable white text contrast
+        nr, ng, nb = colorsys.hls_to_rgb(h, nl, s)
+        palette.append("".join(f"{max(0, min(255, round(c * 255))):02X}" for c in (nr, ng, nb)))
+    return palette
+
+
 def _wrap(text: str, box_w_in: float, fontsize: float) -> list[str]:
+    """Wrap to fit `box_w_in`, but NEVER split a word mid-word.
+
+    `break_long_words=False` matters: with the default True, a narrow
+    column shreds real words across lines — a real 6-pillar sitemap
+    rendered "Highlights" as "Highlight/s", "Administration" as
+    "About & Ad/ministrati/on" and "Resolution" as "Resolutio/n". A word
+    that overflows its column slightly looks fine; a word chopped in half
+    looks broken. `break_on_hyphens=False` likewise keeps hyphenated terms
+    ("Ward-wise", "role-based") intact."""
     chars_per_in = 15.5 * (9.0 / fontsize)
     width = max(int(box_w_in * chars_per_in), 8)
-    return textwrap.wrap(text, width=width) or [""]
+    return textwrap.wrap(text, width=width,
+                          break_long_words=False, break_on_hyphens=False) or [""]
 
 
 def _fig(width_in: float, height_in: float, dpi: int = 200):
@@ -143,10 +181,11 @@ def render_architecture_diagram(layers: list[tuple[str, str]], out_path: str | P
     fp_desc = FontProperties(family=font_family)
 
     fig, ax = _fig(fig_w, fig_h)
+    palette = _derive_palette(accent_hex)
     y = margin
     x = 0.25
     for i, (label, lines, body_h) in enumerate(wrapped):
-        colour = _PALETTE[i % len(_PALETTE)]
+        colour = palette[i % len(palette)]
         _rounded_box(ax, x, y, box_w, body_h)
         _left_bar(ax, x, y, body_h, colour)
         ax.text(x + pad_x + 0.06, y + pad_top + 0.12, label,
@@ -199,7 +238,7 @@ def render_flow_diagram(steps: list[str], out_path: str | Path,
     centers = []
     for i, step in enumerate(steps):
         row, col = divmod(i, cols_per_row)
-        colour = _PALETTE[0]
+        colour = accent_hex
         x = x_start + col * (box_w + gap_x)
         y = margin + row * (box_h + row_gap)
         _rounded_box(ax, x, y, box_w, box_h, fill=colour, edge=colour)
@@ -262,10 +301,11 @@ def render_timeline_diagram(phases: list[tuple[str, str, str]], out_path: str | 
     fp_desc = FontProperties(family=font_family)
 
     fig, ax = _fig(fig_w, fig_h)
+    palette = _derive_palette(accent_hex)
     y = margin
     x = 0.25
     for i, (name, weeks, lines, body_h) in enumerate(wrapped):
-        colour = _PALETTE[i % len(_PALETTE)]
+        colour = palette[i % len(palette)]
         _rounded_box(ax, x, y, box_w, body_h)
         _left_bar(ax, x, y, body_h, colour)
         ax.text(x + pad_x + 0.06, y + pad_top + 0.10, name, fontsize=label_fs,
@@ -299,8 +339,15 @@ def render_sitemap_diagram(site_name: str, pillars: list[tuple[str, list[str]]],
     if not pillars:
         raise ValueError("render_sitemap_diagram: no pillars given")
 
-    fig_w = 7.4
     n = len(pillars)
+    # Widen the canvas as pillars are added rather than shrinking the type.
+    # Font size is NOT the lever here: matplotlib/freetype silently fails to
+    # rasterise below ~8pt at this DPI (text vanishes entirely — see the
+    # fontsize floor documented in Memory.md), so anything narrower has to
+    # come from more canvas, not smaller text. A wider figure embeds at the
+    # same width in the document, so the practical effect is slightly finer
+    # text with every word intact.
+    fig_w = 7.4 if n <= 5 else 7.4 + 0.75 * (n - 5)
     gap_x = 0.18
     margin = 0.25
     col_w = (fig_w - 2 * margin - (n - 1) * gap_x) / n
@@ -344,9 +391,10 @@ def render_sitemap_diagram(site_name: str, pillars: list[tuple[str, list[str]]],
     _down_arrow(ax, fig_w / 2, y + 0.03, y + arrow_h - 0.03, colour=accent_hex)
     y += arrow_h
 
+    palette = _derive_palette(accent_hex)
     x = margin
     for i, (title, _items) in enumerate(pillars):
-        colour = _PALETTE[i % len(_PALETTE)]
+        colour = palette[i % len(palette)]
         _rounded_box(ax, x, y, col_w, body_h)
         header_box_h = header_h
         ax.add_patch(FancyBboxPatch(
@@ -514,10 +562,11 @@ def render_ui_mockup(kind: str, heading: str, out_path: str | Path,
         card_w = (fig_w - 0.7 - 2 * card_gap) / 3
         card_h = content_top + content_h - cards_y - 0.15
         card_labels = [c for c in (cards or []) if c][:3]
+        card_palette = _derive_palette(accent_hex)
         for i in range(3):
             cx = 0.35 + i * (card_w + card_gap)
             _rounded_box(ax, cx, cards_y, card_w, card_h)
-            ax.add_patch(Circle((cx + 0.35, cards_y + 0.35), 0.16, facecolor=_hex(_PALETTE[i]), linewidth=0))
+            ax.add_patch(Circle((cx + 0.35, cards_y + 0.35), 0.16, facecolor=_hex(card_palette[i]), linewidth=0))
             if i < len(card_labels):
                 label_lines = _wrap(card_labels[i], card_w - 0.36, 9.0)[:2]
                 ty = cards_y + 0.66

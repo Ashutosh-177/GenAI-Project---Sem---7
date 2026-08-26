@@ -65,6 +65,17 @@ class TemplateSettings:
 
     # ── Signature block ──────────────────────────────────────────────
     signature_style: str = "labeled"          # labeled | blank-line
+    # The authorized signatory's actual signature image (a scanned/drawn
+    # signature) — distinct from logo_mark_path above, which is a small
+    # COMPANY logo placed near "For Source Soft Solutions", not a person's
+    # signature. None → no signature image, just the "Name:"/"Designation:"
+    # text lines (unchanged prior behaviour). A real user asked for this
+    # explicitly: "I will upload the signature... it should be shown at
+    # its allocated place" — the logo-mark upload already in the UI was
+    # being mistaken for this, since its label ("signature mark") didn't
+    # make the distinction clear.
+    signature_image_path: str | None = None
+    signature_image_width_cm: float = 4.0
 
     # ── Fixed pages ──────────────────────────────────────────────────
     include_cover_page: bool = True

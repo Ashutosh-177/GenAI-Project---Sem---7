@@ -112,10 +112,40 @@ def render_drafting_tab(state_key: str, fields: list, render_fn, id_field_names:
             )
         if dl_col2.button("Convert & download as PDF", key=f"{state_key}_pdf_btn_{out_path.name}"):
             with st.spinner("Converting to PDF..."):
-                pdf_path = docx_to_pdf(out_path)
+                try:
+                    pdf_path = docx_to_pdf(out_path)
+                except Exception as e:
+                    # A real user hit this crashing the whole app instead of
+                    # showing a readable message — the .docx is untouched
+                    # either way, so point them at it as a fallback.
+                    st.error(f"{e}\n\nThe .docx above is still available to download directly.")
+                    st.stop()
             with open(pdf_path, "rb") as f:
                 st.download_button("Download .pdf", data=f.read(), file_name=pdf_path.name,
                                     mime="application/pdf", key=f"{state_key}_dl_pdf_{pdf_path.name}")
+
+        # Source assets: the AI-written mock screens as real .html pages you
+        # can open in a browser or hand to a dev team, plus every diagram as
+        # a standalone .png — rather than only having them flattened inside
+        # the .docx. Zipped in-memory so no stray archive is left on disk.
+        assets_dir = out_path.parent / f"{out_path.stem}_assets"
+        if assets_dir.is_dir() and any(assets_dir.iterdir()):
+            import io, zipfile
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+                for f in sorted(assets_dir.iterdir()):
+                    if f.is_file():
+                        z.write(f, f.name)
+            names = sorted(p.name for p in assets_dir.iterdir() if p.is_file())
+            st.download_button(
+                f"⬇️ Download mock screens & diagrams ({len(names)} files, .zip)",
+                data=buf.getvalue(), file_name=f"{out_path.stem}_assets.zip",
+                mime="application/zip", key=f"{state_key}_dl_assets_{out_path.name}",
+            )
+            with st.expander("What's in the assets download?"):
+                st.write("\n".join(f"- `{n}`" for n in names))
+                st.caption("The .html files are complete standalone pages — open them "
+                           "in any browser, or hand them to a developer as a starting point.")
 
     if len(st.session_state[history_key]) > 1:
         with st.expander(f"Previous drafts this session ({len(st.session_state[history_key]) - 1})"):
@@ -377,11 +407,12 @@ with tab_settings:
         logo_width = st.slider("Logo width (cm)", 2.0, 12.0, s.logo_width_cm, 0.5, key="logo_width_slider")
     with logo_col2:
         uploaded_mark = st.file_uploader(
-            "Upload signature mark (PNG/JPEG)", type=["png", "jpg", "jpeg"],
+            "Upload small logo mark (PNG/JPEG)", type=["png", "jpg", "jpeg"],
             key="mark_uploader",
-            help="Small logo for the signature block"
+            help="A small company logo/seal placed near \"For [Organisation]\" — "
+                 "not a person's signature. For that, see below."
         )
-        mark_width = st.slider("Signature mark width (cm)", 0.5, 4.0, s.logo_mark_width_cm, 0.1,
+        mark_width = st.slider("Logo mark width (cm)", 0.5, 4.0, s.logo_mark_width_cm, 0.1,
                                 key="mark_width_slider")
 
     use_default_logo = st.checkbox("Use default Source Soft Solutions logo", value=(s.logo_path is None), key="use_default_logo")
@@ -406,6 +437,37 @@ with tab_settings:
         mark_save = logo_dir / f"custom_mark.{uploaded_mark.name.split('.')[-1]}"
         mark_save.write_bytes(uploaded_mark.getvalue())
         custom_mark_path = str(mark_save.resolve())
+
+    st.divider()
+
+    # ── Authorized Signatory's Signature ──
+    # Distinct from the logo mark above: this is the actual person's
+    # signature image (a scan or a drawn signature), placed directly
+    # above the "Name:"/"Designation:" lines in the Technical Proposal's
+    # signature block — its allocated place, matching where an ink
+    # signature sits on a real signed document. A real user asked for
+    # this explicitly and reported the logo-mark upload wasn't it.
+    st.subheader("✍️ Authorized Signatory's Signature")
+    sig_col1, sig_col2 = st.columns(2)
+    with sig_col1:
+        uploaded_signature = st.file_uploader(
+            "Upload signature (PNG/JPEG)", type=["png", "jpg", "jpeg"],
+            key="signature_uploader",
+            help="Appears directly above the signatory's printed name in the "
+                 "Technical Proposal's signature block"
+        )
+    with sig_col2:
+        signature_width = st.slider("Signature width (cm)", 1.0, 8.0, s.signature_image_width_cm, 0.25,
+                                     key="signature_width_slider")
+
+    custom_signature_path = s.signature_image_path
+    if uploaded_signature is not None:
+        sig_dir = Path("data/template_presets/logos")
+        sig_dir.mkdir(parents=True, exist_ok=True)
+        sig_save = sig_dir / f"custom_signature.{uploaded_signature.name.split('.')[-1]}"
+        sig_save.write_bytes(uploaded_signature.getvalue())
+        custom_signature_path = str(sig_save.resolve())
+        st.image(uploaded_signature, caption="Preview — this is how it will appear in the document", width=300)
 
     st.divider()
 
@@ -481,6 +543,8 @@ with tab_settings:
             logo_width_cm=logo_width,
             logo_mark_path=custom_mark_path,
             logo_mark_width_cm=mark_width,
+            signature_image_path=custom_signature_path,
+            signature_image_width_cm=signature_width,
             show_page_border=show_border,
             page_border_style=border_style,
             show_running_header=show_header,

@@ -36,9 +36,9 @@ def _get_model() -> WhisperModel:
 # toward vocabulary that's likely to appear — this document domain's
 # acronyms otherwise look like noise to a general-purpose "base" model that's
 # never specifically seen "MoU"/"NABL"/etc. as a real word.
-DOMAIN_PROMPT = ("This is a query about Indian government documents: MoU, Work Order, "
-                  "Agreement, Proposal, Quality Council of India, QCI, NABL, NABH, NABET, "
-                  "NABCB, tender, accreditation, certification.")
+DOMAIN_PROMPT = ("This is a query about Indian government/institutional documents: MoU, "
+                  "Work Order, Agreement, Proposal, Source Soft Solutions, NABL, NABH, "
+                  "NABET, NABCB, tender, accreditation, certification.")
 
 
 def transcribe_audio(audio_path: str | Path, language: str | None = None) -> dict:

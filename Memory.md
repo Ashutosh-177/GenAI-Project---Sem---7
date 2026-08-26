@@ -1401,6 +1401,432 @@ Partners" as its modules now shows exactly those as the mockup's feature
 cards, and its admin capabilities as the sidebar items — confirmed via
 rendered PDF.
 
+### Section 14 upgraded to real HTML/CSS screenshots (25 Aug 2026)
+
+User asked directly for real fidelity: "make screens of HTML and then
+the screenshots of the screens to be fed in the PDF... can we do that in
+low cost?" The matplotlib wireframe (circles + gray placeholder bars)
+was always going to look hand-drawn next to a real UI; real HTML/CSS
+rendered by an actual browser (real fonts, flexbox, box-shadows) looks
+like an actual product screenshot.
+
+**"Low cost" concern addressed directly**: this is $0 in API terms.
+`generation/html_mockup.py` builds the mockup as an HTML string using
+data ALREADY generated for other sections (same `nav_items`/`cards`/
+`sidebar_items` wiring as the matplotlib version, added the same day) —
+no new LLM call. The only new "cost" is a local headless-browser
+screenshot (Chrome or Edge, confirmed both already installed on this
+machine — `--headless --screenshot=... --window-size=1200,1600
+--force-device-scale-factor=2`), then a Pillow `ImageChops.difference`
+auto-crop against the page's own background colour to remove the
+trailing blank space below the actual content (window-size is
+deliberately taller than any real content, since Chrome's `--screenshot`
+captures exactly the viewport and there's no CLI flag for "full page,
+auto height" in headless mode — cropping after the fact is the standard
+workaround). No new pip dependency either — subprocess + the Pillow
+already in requirements.txt.
+
+**Resilience**: `_add_ui_mockup_image` (build_templates.py) tries
+`render_html_mockup` first, and falls back to the original
+`diagram_render.render_ui_mockup` (matplotlib) on ANY exception —
+covers `BrowserNotFoundError` (no Chrome/Edge found — checked via a
+hardcoded Windows path list + `shutil.which` for other platforms) and
+any other failure (subprocess timeout, malformed HTML, etc.) without
+ever breaking a draft. A machine without Chrome/Edge just silently gets
+the lower-fidelity wireframe instead, same as before this feature
+existed.
+
+**Verified free**, and via a route that also sidesteps a real
+environment issue hit along the way: Qdrant (Docker) wasn't running when
+I went to re-verify through the full `render_document()` pipeline, and
+Docker Desktop itself wasn't running either — starting it just to prove
+an unrelated feature works would've been slow overkill. Instead, tested
+the actual integration point directly: built a bare `python-docx`
+`Document` with `[[UI_MOCKUP_HOME]]`/`[[UI_MOCKUP_ADMIN]]` marker
+paragraphs and called `_inject_generated_content()` on it with a
+hand-built `content` dict, bypassing `render_document()`'s narrative
+expansion (and therefore Qdrant) entirely — confirmed 2 images embedded
+(107KB/68KB, consistent with the high-DPI HTML screenshots, not the
+smaller matplotlib fallback), then converted to PDF and visually
+confirmed both mockups render correctly at their embedded width with
+real project-specific nav items, cards, and sidebar items. Worth
+remembering as a pattern: when only one code path changed, test that
+path directly rather than always going through the full user-facing
+pipeline and its full dependency chain.
+
+### Full zero-cost regression pass across all 13 templates (25 Aug 2026)
+
+User asked to "test all functionalities... without costing any API
+cost." Ran a systematic sweep, stubbing `drafting._llm_chat` (canned
+text) and `drafting.search` (empty list — Qdrant/Docker happened to be
+down again, unrelated infra, same workaround as the mockup test above)
+so every check below is genuinely $0:
+
+1. `scripts/build_templates.py` — all 13 templates rebuild clean.
+2. `scripts/check_template_coverage.py` — all 13 pass (every `{{ field }}`
+   placeholder has a matching context key).
+3. **All 13 `ALL_TEMPLATE_SPECS` rendered end-to-end** with generic
+   per-field test values — 13/13 succeeded with no exceptions, confirming
+   this session's shared-helper changes (`_set_body_font`, `_add_letterhead`,
+   the footer rework) didn't regress the 12 templates beyond Technical
+   Proposal, which is the thing that had genuinely never been re-verified
+   since those changes were made.
+4. **Real bug found by this sweep, not by guessing**: visually spot-checked
+   two of the "other 12" (Work Order Services — clean; Agreement Licensing
+   — NOT clean) and found the Licensing Agreement's cover page showing
+   "Licensor: Quality Council of India". Root cause: `generation/drafting.py`
+   had **13 separate field-default hardcodes** to `"Quality Council of
+   India"` across the OTHER templates this session's QCI→Source Soft pivot
+   never touched (that work all happened in `build_templates.py`/
+   `template_settings.py`, not in `drafting.py`'s field-definition lists) —
+   `issuing_organisation` (all 3 Work Order variants), `party_a_name` (MoU
+   Institutional, plus its question text literally said "usually QCI"),
+   `indian_party_name` (MoU International), `department_a_name` (MoU
+   Interdept), `client_name` (Agreement Service + Consultancy),
+   `licensor_name` (Agreement Licensing — the one that surfaced visually),
+   `submitted_to` (all 3 Proposal variants). Fixed by field role, not
+   uniformly: fields representing Source Soft Solutions' OWN identity in
+   the document (issuing org, "first party", licensor, etc.) now default to
+   `"Source Soft Solutions"`; fields representing the CLIENT/counterparty
+   (`client_name`, `submitted_to`) now default to `None` (required, forces
+   real input) — same pattern `TECHNICAL_PROPOSAL_FIELDS.client_name`
+   already used correctly, extended to the other 12. Re-ran the render
+   sweep and re-checked the Licensing Agreement specifically post-fix:
+   "Licensor: Source Soft Solutions", confirmed via rendered PDF.
+   `generation/voice.py`'s Whisper `DOMAIN_PROMPT` (a transcription-accuracy
+   vocabulary hint, not document content) also still said "Quality Council
+   of India, QCI" — updated to "Source Soft Solutions" for consistency,
+   lower stakes since it never touches generated documents.
+5. **Full 17-section Technical Proposal deep-dive**, all fields populated
+   with realistic structured content (not just placeholder-per-field like
+   the 13-template sweep) — every diagram, every table, both HTML mockups,
+   leadership photos, all confirmed correct via a 12-page rendered PDF.
+6. **All 5 template presets** re-verified: `organisation_name` correct on
+   all (Source Soft Solutions on 4, intentionally blank on Minimal Clean),
+   each preset's distinct colour styling intact.
+7. **HTML-mockup fallback path explicitly exercised** (not just the happy
+   path) — monkeypatched `render_html_mockup` to raise
+   `BrowserNotFoundError` and confirmed `_add_ui_mockup_image` correctly
+   falls back to the matplotlib wireframe: 2 images still embedded, sizes
+   consistent with matplotlib output (~40-50KB) rather than the HTML
+   screenshots (~70-110KB), proving the fallback actually engaged rather
+   than silently reusing a cached result.
+8. **Retry-with-backoff logic re-verified** post-hoc (same 2 scenarios as
+   when it was first built: retry-then-succeed, non-retryable-raises-
+   immediately) to confirm no regression from later changes.
+
+**Not fixed, flagged as low-priority**: `scripts/test_all_templates.py`,
+`test_draft.py`, `test_mou_draft.py` — standalone dev smoke-test scripts
+with QCI-flavoured sample fixture data (not just the org name; entire
+narrative briefs reference "QCI's Delhi office", "QCI's accreditation
+boards", etc.). Never imported by `demo_app.py` or reachable by a real
+user — pure dev fixtures. Rewriting their full sample scenarios was
+judged lower-value than the real bug found in `drafting.py`'s actual
+runtime defaults; left as a known cosmetic item rather than silently
+skipped.
+
+### PDF download failure (25 Aug 2026) — fixed without touching the API
+
+User reported "wasn't able to download as a PDF" while using the app the
+previous night, and explicitly asked for a fix that touches no API key.
+This is a pure local/COM-automation issue — `generation/export.py`'s
+`docx_to_pdf()` wraps `docx2pdf.convert()`, which drives MS Word via COM,
+nothing to do with Anthropic at all.
+
+**Root cause (found by reading docx2pdf's own source, not guessed)**:
+`docx2pdf`'s Windows code path (`windows()` in its `main.py`) calls
+`win32com.client.Dispatch("Word.Application")` with **zero explicit COM
+initialization** — it relies on the calling thread already being in a COM
+apartment. A bare top-level script gets this for free most of the time;
+a long-lived worker thread (Streamlit reruns the app script in a
+per-session thread, not the process's true main thread) is not
+guaranteed to. This is the single most commonly reported docx2pdf
+failure mode outside plain scripts. A synthetic reproduction via a bare
+`threading.Thread` happened to succeed (pywin32 sometimes auto-initializes
+COM lazily on first use, which is exactly the kind of undocumented,
+incidental behaviour that fails intermittently under different real
+conditions — consistent with "worked before, didn't work last night"
+rather than a hard, always-reproducible bug), so the fix went in
+regardless of local repro success, since it's the textbook correct fix
+and cheap to add either way.
+
+**Fix, `generation/export.py`**: `docx_to_pdf()` now runs the actual
+`convert()` call inside a dedicated thread that explicitly calls
+`pythoncom.CoInitialize()` before and `CoUninitialize()` after — the
+standard, documented fix for this exact class of docx2pdf issue. Also
+added a **60-second hard timeout** via `thread.join(timeout=...)`: if
+Word is stuck behind a blocking dialog (an update prompt, or an
+unsaved-document recovery prompt left over from a previous crashed
+session — both real, common ways Word COM automation hangs forever
+rather than erroring), the app now raises a clear, actionable
+`PdfConversionError` ("close any open Word windows... check the taskbar
+even if none look open") instead of hanging indefinitely. Any other
+conversion failure (Word not installed/licensed, file lock, etc.) is
+also wrapped in `PdfConversionError` with a readable message and a
+pointer to the still-available `.docx`, rather than a raw
+`pywintypes.com_error` traceback.
+
+**`scripts/demo_app.py`**: the PDF-download button's `docx_to_pdf(out_path)`
+call had no try/except at all — any failure crashed the whole app, which
+is very plausibly what the user actually saw last night (a scary
+traceback that reads as "the download didn't work" without explaining
+why). Wrapped in try/except with `st.error(...)` + `st.stop()`, pointing
+back at the `.docx` download (already succeeded, sitting right above the
+PDF button) as a fallback.
+
+**Verified with zero API cost** (this whole fix never touches the LLM
+client): confirmed the normal conversion path still works unmodified;
+monkeypatched `export.convert` to `time.sleep(30)` and confirmed the new
+code raises `PdfConversionError` at the timeout boundary (tested with a
+shortened 1.5s timeout) instead of hanging; monkeypatched `export.convert`
+to raise a plain `RuntimeError` and confirmed it comes back wrapped as a
+readable `PdfConversionError` rather than propagating the raw COM
+exception type.
+
+### Dark Mode / Light Mode diagrams ignored the preset entirely (25 Aug 2026)
+
+User reported "light mode and dark mode is not working properly" — vague,
+so investigated by actually rendering both presets (zero API cost, same
+stub approach as the full test sweep) rather than guessing. Found it
+immediately: section headings correctly picked up each preset's colours
+(Dark Mode's near-black bars, Light Mode's pale slate bars — both already
+settings-driven via `_add_shaded_heading`), but every diagram and mockup
+— sitemap, architecture, flow, timeline, UI mockup card icons — used a
+**hardcoded literal colour list** (`_PALETTE` in both
+`generation/diagram_render.py` and `generation/html_mockup.py`) that
+never changed no matter which preset was active. Concretely: Dark Mode's
+sitemap title bar correctly showed bright blue (it already used
+`accent_hex`), but the pillar cards below it stayed the old default
+navy/red — a visibly broken mismatch on the same diagram. The flow
+diagram was worse: every box used `_PALETTE[0]` (hardcoded navy)
+regardless of preset, so it never changed at all.
+
+**Fix**: added `_derive_palette(accent_hex, n=5)` (duplicated in both
+files, same reasoning as the two `_PALETTE` constants originally being
+duplicated rather than cross-imported) — generates `n` coordinated
+swatches from the actual preset's `accent_colour` instead of a fixed
+list. **First version rotated hue** (small shifts around the accent's
+hue) and looked genuinely bad — Dark Mode's saturated blue accent
+produced neon cyan/magenta/purple swatches once shifted, nothing like a
+"theme." Rewrote to vary **lightness only, same hue** — a monochromatic
+set of shades of the accent colour — which guarantees every swatch
+visibly belongs to the same colour family as the rest of the page,
+lightness clamped to a legible-with-white-text range (0.16–0.50 in HLS).
+Wired into all 5 real usages: `render_architecture_diagram` and
+`render_timeline_diagram`'s per-card left-bar colour (was cycling
+`_PALETTE[i % len(_PALETTE)]`), `render_sitemap_diagram`'s per-pillar
+header colour (same), `render_flow_diagram`'s box fill (was hardcoded
+`_PALETTE[0]` — simplified to just `accent_hex` directly, since flow
+boxes are all the same type and don't need variety), and both
+`render_ui_mockup` (matplotlib fallback) and `html_mockup.py`'s card icon
+colours. The old `_PALETTE` constants are now fully unused and were
+deleted from both files rather than left as dead code.
+
+Verified free: re-rendered the same Technical Proposal under Dark Mode
+and Light Mode (Qdrant/Docker still down, same `drafting.search` stub as
+every other zero-cost check this session) and visually confirmed via PDF
+— Dark Mode's sitemap, flow diagram, and mockup cards are now all
+coordinated shades of its blue accent instead of clashing with hardcoded
+navy/red; Light Mode's are coordinated shades of its azure accent.
+Printed the derived palettes directly for all 4 presets' accent colours
+to sanity-check the actual hex output before re-rendering, not just
+trusting the visual — caught the neon-hue-rotation problem this way
+before it ever reached a rendered page.
+
+**Not addressed, worth flagging if this wasn't the whole complaint**: a
+Word document's page background stays white in every preset — "Dark
+Mode" here has only ever meant dark HEADING BARS with a bright accent
+(per its own docstring: "deep midnight heading bars, cyan/indigo accent,
+dark border"), not an inverted dark page background, since printed/
+government-style documents don't typically ship with black page
+backgrounds. If the user's original complaint was actually about
+expecting a fully dark page rather than the colour-mismatch bug found
+and fixed here, that's a different, much larger design conversation
+worth having explicitly rather than assumed.
+
+### New feature: real signatory signature-image upload (25 Aug 2026)
+
+User asked to upload "the signature" and have it "shown at its allocated
+place," and to test that before any API cost. Investigated first rather
+than assuming it already worked: the only existing upload near the
+signature block was `logo_mark_path` ("Upload signature mark" in the UI)
+— which is actually a small COMPANY logo placed above "For Source Soft
+Solutions", not a person's signature. There was no way to upload an
+actual signatory's signature image at all before this.
+
+**Built as a genuinely new, separate capability** rather than repurposing
+the mislabeled one (a real signature and a company seal serve different
+visual roles and both can appear together, as a real signed document
+often has both): `TemplateSettings` gained `signature_image_path` /
+`signature_image_width_cm` (`generation/template_settings.py`).
+`_resolve_signature_image()` (build_templates.py, mirrors the existing
+`_resolve_logo`/`_resolve_logo_mark` pattern, but with no built-in
+default — no real person's signature ships with this repo, unlike the
+logo). Wired into `build_technical_proposal_template`'s signature block
+so the image sits directly above the "Name:"/"Designation:" lines — the
+same position an ink signature occupies on a real signed document, and
+visibly separate from the small logo mark near "For {{ submitted_by }}"
+above it. Scoped to the Technical Proposal only for now (it has exactly
+one signatory; the MoU/Agreement templates have two each — Party A/B —
+which doesn't map cleanly onto one global signature setting, and
+extending this properly to those is a separate follow-up if wanted).
+
+**`scripts/demo_app.py`**: added a distinctly-labeled "✍️ Authorized
+Signatory's Signature" upload section (own file uploader, own width
+slider, a live preview via `st.image(...)` right after upload so the
+user can see what they just added before generating anything) — placed
+right after the logo/mark section, whose own uploader label was changed
+from "Upload signature mark" to "Upload small logo mark" specifically to
+stop it being mistaken for this new one, which is exactly the confusion
+that prompted this whole feature request.
+
+**Verified end-to-end at zero API cost**: generated a synthetic
+signature-shaped test image (PIL, a squiggly line on a transparent
+background — deliberately signature-proportioned: wide, short aspect
+ratio, unlike a portrait photo) since no real signature file exists in
+this repo, rendered a full Technical Proposal with `_llm_chat`/`search`
+stubbed and `signature_image_path` pointed at the test file, converted
+to PDF, and visually confirmed: the squiggle appears directly above
+"Name: Vijay Konar / Designation: Chief Technology Officer", correctly
+separate from and below the small Source Soft Solutions logo mark above
+"For Source Soft Solutions" — exactly the "allocated place" asked for.
+
+
+### Custom-logo white-label bug found by testing branding end-to-end (25 Aug 2026)
+
+User asked, before testing: if I upload a logo, "will it surpass the logo
+of sourcesoft?" Rather than answering from the code's intent, rendered
+all three branding cases with a deliberately garish green/yellow test
+logo (so any mix-up would be unmistakable) at zero API cost.
+
+**Result — two of three places were already correct, one was a real bug:**
+cover page ✅ and letterhead ✅ both correctly replaced Source Soft's logo
+with the uploaded one, but the SIGNATURE BLOCK still showed Source Soft
+Solutions' logo. Root cause: `_resolve_logo_mark()` fell straight back to
+the built-in `LOGO_MARK` (Source Soft's own file) whenever no *separate*
+mark was uploaded — and uploading one logo but not two is the common
+case, since most users have a single logo file. Net effect: a document
+branded for another company carried Source Soft's logo right next to its
+signature.
+
+**Fix**: `_resolve_logo_mark()` now falls back to the custom MAIN logo
+before the built-in mark. Also made `logo_path == "__NONE__"` (logo
+explicitly disabled) suppress the mark too — "no logo" should mean no
+logo anywhere, not "no logo except the signature block." Re-rendered all
+three cases and confirmed visually: custom logo now appears in all three
+places; "no logo" produces no mark anywhere while the signature image
+still renders; default (nothing uploaded) still shows Source Soft's logo
+as before.
+
+**Known limitation, deliberately NOT auto-fixed**: uploading a logo does
+not change `organisation_name`, so the cover still reads "Source Soft
+Solutions" next to a foreign logo, and the About the Company page still
+renders Source Soft's real profile + leadership photos (it keys off
+`organisation_name == "Source Soft Solutions"`). That is arguably correct
+— changing a logo shouldn't silently rewrite who the document says it is
+— but it means full white-labelling requires changing Organisation name
+too, which then correctly swaps the About page to the generic
+`{{ about_company }}` field. Told the user this explicitly rather than
+leaving them to discover a half-rebranded document.
+
+### The stubbing blind spot — "are you sure the webpage will work?" (25 Aug 2026)
+
+User challenged directly whether the app would actually work, after being
+told repeatedly that features were "verified." The honest answer was no,
+and the challenge was correct.
+
+**The blind spot**: every zero-cost verification this session called
+`render_document()` directly in Python with BOTH `drafting._llm_chat` and
+`drafting.search` stubbed. Stubbing the LLM was right (it costs money).
+Stubbing `search` started as an incidental workaround for Qdrant/Docker
+being down — and then silently became permanent across every later test.
+The Streamlit app was NEVER once launched all session. Net result:
+`retrieval.store.search()` raised on every real draft (Qdrant unreachable),
+which would have failed the user's very first attempt at the example
+walkthrough they'd just been handed. It fails BEFORE any LLM call, so it
+would not have cost money — but it would have wasted their time and
+confirmed exactly the distrust they were expressing.
+
+**Lesson worth keeping**: stubbing a dependency to test around it is fine;
+forgetting that the unstubbed path was therefore never exercised is not.
+If a stub is added for convenience rather than cost, that path still owes
+one real end-to-end run before claiming anything works.
+
+**Fixes**:
+1. `generation/drafting.py` — `search()` is now a wrapper around
+   `retrieval.store.search` that catches ANY exception and returns `[]`
+   with a console note. Retrieval grounding is a quality enhancement, not
+   a hard requirement; callers already handle empty `reference_chunks`
+   (`reference_text` becomes "" and the leak-detection guardrail is
+   correctly skipped, since with no reference text there is nothing to
+   leak). Drafts now still generate with Qdrant down.
+2. Actually launched and drove the real app, which found a second thing:
+   headless Chrome + `--virtual-time-budget` CANNOT render a Streamlit app
+   (virtual time advances but the websocket round-trips never complete —
+   the screenshot froze mid-load twice and looked like an app hang, which
+   it was not). The right tool is `streamlit.testing.v1.AppTest`, which
+   runs the real script in-process and surfaces exceptions properly. Worth
+   remembering for any future Streamlit verification: AppTest, not
+   screenshots.
+
+**Verified via AppTest** (still zero API cost): app boots in ~17s with 0
+exceptions and all 4 tabs; all 10 Template Settings sections render
+including the new "Authorized Signatory's Signature"; "Apply Settings"
+click executes the new signature code path with 0 exceptions and stores
+`signature_image_path`/`signature_image_width_cm` correctly; the drafting
+Q&A flow accepts answers and advances through questions with 0 exceptions
+and correct `session_state` accumulation.
+
+**Still genuinely untested**: the actual "Generate" click, because that
+spends real API budget and the user has ~$5. What that leaves unproven is
+only the `st.button -> render_fn(session)` wiring itself (a few lines, now
+wrapped in try/except); `render_document()` behind it has been exercised
+heavily. Said so plainly rather than rounding up to "everything works."
+
+
+### AI-designed mock screens shipped + first real end-to-end run (25 Aug 2026)
+
+User asked for section 14's mockups to be genuinely generated from the
+proposal (LLM writes the HTML, browser renders it, screenshot embedded),
+then explicitly authorised real API spend on Sonnet for a full run.
+
+**Built**: `_generate_mockup_html()` (drafting.py) asks the model for a
+complete self-contained HTML page — inline CSS only, no CDN/webfonts/
+`<img>`/JS (headless Chrome renders offline, so anything remote renders
+broken), width pinned to 1160px so the screenshot crops predictably.
+`_strip_code_fences()` removes the ```html wrapper the model adds anyway.
+`html_mockup.render_ai_mockup()` screenshots it and validates via
+`_looks_like_a_real_page()` — size, aspect ratio, and colour variety —
+then `_add_ui_mockup_image` falls back to the built-in template on ANY
+failure. The validator was tested BEFORE the paid run by feeding it a
+deliberately blank page (correctly rejected: "only 1 distinct colours")
+and a hand-written realistic page (correctly accepted).
+
+**Real run** (Sonnet, ~27 calls, 343s, ≈$0.25): produced a 23-page
+proposal for a fictional Pune Municipal Corporation portal. Both AI
+mockups passed validation and were used — no fallback triggered. Quality
+was well beyond the fixed template: the public page invented a plausible
+`pmc.gov.in` URL, a मराठी|English toggle with real Devanagari, civic
+modules matching the brief, and CERT-In/WCAG badges; the admin dashboard
+invented real Pune ward names (Kothrud, Shivajinagar, Hadapsar), an
+EN/MR bilingual authoring queue, an RBAC permission matrix and an audit
+log.
+
+**Real bug the paid run exposed that every prior test had missed**: the
+model returned SIX sitemap pillars (all prior tests happened to use five).
+Six narrower columns made `_wrap` shred words mid-word — "Highlights" ->
+"Highlight/s", "Administration" -> "About & Ad/ministrati/on",
+"Resolution" -> "Resolutio/n". Root cause: `textwrap.wrap` defaults to
+`break_long_words=True`. Fixed with `break_long_words=False` +
+`break_on_hyphens=False`, and by WIDENING the canvas as pillars are added
+rather than shrinking the font — font size is not available as a lever
+here because of the previously-documented sub-8pt invisible-text floor.
+Verified free by re-rendering the sitemap from the exact six-pillar data
+the paid run produced.
+
+**Lesson**: a fixed test fixture (always 5 pillars) hid a layout bug that
+only appears at a count the model chose on its own. Varying-N cases are
+worth testing at the boundary, not just at the convenient value.
 ---
 
 ## 9. Where to look for more detail

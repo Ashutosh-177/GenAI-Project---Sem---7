@@ -9,6 +9,7 @@ and fixed pages (cover, TOC, declarations) are driven by the settings
 dataclass instead of hardcoded constants, so the UI can customise them
 per-render."""
 import copy
+import shutil
 import sys
 from pathlib import Path
 
@@ -54,13 +55,40 @@ def _resolve_logo(settings: TemplateSettings) -> Path | None:
 
 
 def _resolve_logo_mark(settings: TemplateSettings) -> Path | None:
-    """Return the signature-block mark path, or None if disabled."""
+    """Return the signature-block mark path, or None if disabled.
+
+    When no dedicated mark is uploaded, this falls back to the CUSTOM main
+    logo (if one was uploaded) before falling back to Source Soft's
+    built-in mark. Without that middle step there was a real white-label
+    bug, confirmed by rendering: uploading only a custom company logo
+    correctly replaced the cover page and letterhead, but the signature
+    block still showed Source Soft Solutions' logo — i.e. a document
+    branded for one company carried a different company's logo next to
+    its signature. Uploading a main logo but no mark is the common case
+    (most users have one logo file, not two), so this fallback matters.
+
+    A logo explicitly disabled ("__NONE__") also disables the mark —
+    "no logo" should mean no logo anywhere, not "no logo except the
+    signature block."""
     if settings.logo_mark_path == "__NONE__":
         return None
     if settings.logo_mark_path and Path(settings.logo_mark_path).exists():
         return Path(settings.logo_mark_path)
+    if settings.logo_path == "__NONE__":
+        return None
+    if settings.logo_path and Path(settings.logo_path).exists():
+        return Path(settings.logo_path)
     if LOGO_MARK.exists():
         return LOGO_MARK
+    return None
+
+
+def _resolve_signature_image(settings: TemplateSettings) -> Path | None:
+    """Return the authorized signatory's uploaded signature image, or None
+    if none was uploaded — unlike the logo/logo-mark, there's no built-in
+    default here (no real person's signature ships with this repo)."""
+    if settings.signature_image_path and Path(settings.signature_image_path).exists():
+        return Path(settings.signature_image_path)
     return None
 
 
@@ -1170,25 +1198,89 @@ def _add_sitemap_diagram_image(doc, paragraph, site_name: str,
 def _add_ui_mockup_image(doc, paragraph, kind: str, heading: str,
                           nav_items: list[str] | None = None, cards: list[str] | None = None,
                           sidebar_items: list[str] | None = None,
+                          custom_html: str | None = None,
                           settings: TemplateSettings | None = None):
-    """Renders a low-fidelity UI wireframe (browser frame + nav/hero/cards
-    for `kind="public_home"`, or sidebar/stat-cards/table for
+    """Renders a UI mockup (browser frame + nav/hero/cards for
+    `kind="public_home"`, or sidebar/stat-cards/table for
     `kind="admin_dashboard"`) and embeds it in place of its marker
-    paragraph — the actual "wireframes/mock screens" the reference
-    proposal's section 14 shows and this template didn't have at all
-    before. `nav_items`/`cards`/`sidebar_items` (from this project's own
-    sitemap/modules/admin-capabilities, passed by _inject_generated_content)
-    make the mockup reflect THIS project instead of a generic skeleton
-    every project used to get — a real user asked "will the image be the
-    same [every time]?" and the honest answer had been yes."""
-    from generation.diagram_render import render_ui_mockup
+    paragraph — the "wireframes/mock screens" the reference proposal's
+    section 14 shows. `nav_items`/`cards`/`sidebar_items` (from this
+    project's own sitemap/modules/admin-capabilities, passed by
+    _inject_generated_content) make the mockup reflect THIS project
+    instead of a generic skeleton every project used to get.
+
+    Tries `generation.html_mockup.render_html_mockup` first — a real
+    HTML/CSS page screenshotted with a local headless Chrome/Edge, far
+    higher fidelity (real fonts, flexbox, box-shadows) than a hand-drawn
+    matplotlib wireframe, at effectively zero marginal cost since it
+    reuses content already generated for other sections rather than
+    calling the LLM again. A real user asked for exactly this after
+    seeing the matplotlib version. Falls back to
+    `generation.diagram_render.render_ui_mockup` (the original
+    matplotlib wireframe) if no local Chrome/Edge is found — keeps this
+    working on a machine without either browser installed, just at
+    lower fidelity there."""
     s = settings or TemplateSettings()
-    _embed_diagram_image(
-        paragraph, render_ui_mockup, kind, heading,
-        tmp_name=f"ui_mockup_{kind}.png", width_cm=13.0,
-        accent_hex=s.accent_colour, font_family=s.font_family,
-        nav_items=nav_items, cards=cards, sidebar_items=sidebar_items,
-    )
+    # Preferred: the model designed this page itself for this specific
+    # project. Only used if the rendered screenshot passes validation —
+    # `render_ai_mockup` raises otherwise, falling through to the built-in
+    # template below rather than putting a broken page in a client document.
+    if custom_html:
+        try:
+            from generation.html_mockup import render_ai_mockup
+            _embed_diagram_image(
+                paragraph, render_ai_mockup, custom_html,
+                tmp_name=f"ui_mockup_ai_{kind}.png", width_cm=15.5,
+            )
+            return
+        except Exception as e:
+            print(f"[mockup] AI-generated {kind} rejected ({e}); using built-in template.")
+    try:
+        from generation.html_mockup import render_html_mockup
+        _embed_diagram_image(
+            paragraph, render_html_mockup, kind, heading,
+            tmp_name=f"ui_mockup_{kind}.png", width_cm=15.5,
+            accent_hex=s.accent_colour, font_family=s.font_family,
+            nav_items=nav_items, cards=cards, sidebar_items=sidebar_items,
+        )
+    except Exception:
+        from generation.diagram_render import render_ui_mockup
+        _embed_diagram_image(
+            paragraph, render_ui_mockup, kind, heading,
+            tmp_name=f"ui_mockup_{kind}.png", width_cm=13.0,
+            accent_hex=s.accent_colour, font_family=s.font_family,
+            nav_items=nav_items, cards=cards, sidebar_items=sidebar_items,
+        )
+
+
+# When set, every diagram/mockup image embedded into a document is ALSO
+# copied here, so the user can download the source assets rather than
+# only getting them flattened inside a .docx. Module-level rather than
+# threaded through ~8 call signatures: rendering is a single-threaded,
+# one-document-at-a-time path, and `_collect_assets_into()` scopes it so
+# it can never leak between renders.
+_ASSET_DIR: Path | None = None
+
+
+class _collect_assets_into:
+    """Context manager: while active, embedded images are also saved to
+    `directory`. Always clears on exit, including on exception, so a
+    failed render can't leave the next one writing into a stale folder."""
+
+    def __init__(self, directory):
+        self._dir = Path(directory) if directory else None
+
+    def __enter__(self):
+        global _ASSET_DIR
+        _ASSET_DIR = self._dir
+        if self._dir:
+            self._dir.mkdir(parents=True, exist_ok=True)
+        return self
+
+    def __exit__(self, *exc):
+        global _ASSET_DIR
+        _ASSET_DIR = None
+        return False
 
 
 def _embed_diagram_image(paragraph, render_fn, *args, width_cm: float = 16.0, tmp_name: str, **kwargs):
@@ -1213,6 +1305,8 @@ def _embed_diagram_image(paragraph, render_fn, *args, width_cm: float = 16.0, tm
         run.text = ""
     run = paragraph.runs[0] if paragraph.runs else paragraph.add_run()
     run.add_picture(str(tmp_path), width=Cm(width_cm))
+    if _ASSET_DIR is not None:
+        shutil.copy(tmp_path, _ASSET_DIR / tmp_name)
     tmp_path.unlink(missing_ok=True)
 
 
@@ -1566,6 +1660,16 @@ def build_technical_proposal_template(settings: TemplateSettings | None = None):
         mark_para.add_run().add_picture(str(mark), width=Cm(s.logo_mark_width_cm))
     _set_left(doc.add_paragraph(f"For {{{{ submitted_by }}}}"))
     doc.add_paragraph()
+    # The signature IMAGE (a scanned/drawn signature) sits directly above
+    # the printed "Name:"/"Designation:" lines — its allocated place,
+    # matching where an ink signature goes on a real signed document.
+    # Distinct from `mark` above, which is a small COMPANY logo near "For
+    # {{ submitted_by }}", not a person's signature.
+    signature_img = _resolve_signature_image(s)
+    if signature_img:
+        sig_para = doc.add_paragraph()
+        _set_left(sig_para)
+        sig_para.add_run().add_picture(str(signature_img), width=Cm(s.signature_image_width_cm))
     _set_left(doc.add_paragraph(_signature_lines("{{ signatory_name }}", "{{ signatory_designation }}")))
 
     _add_technical_proposal_footer(doc, "{{ client_name }}", s)

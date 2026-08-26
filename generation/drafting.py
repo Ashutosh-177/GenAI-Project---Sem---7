@@ -19,7 +19,38 @@ from docxtpl import DocxTemplate
 
 from generation.llm_client import chat as _llm_chat
 from generation.template_settings import TemplateSettings
-from retrieval.store import search
+from retrieval.store import search as _raw_search
+
+
+def search(*args, **kwargs):
+    """Retrieval with graceful degradation.
+
+    Reference-document retrieval is a QUALITY enhancement — it grounds the
+    model in the tone/structure of real past documents — not a hard
+    requirement for producing a draft. But `retrieval.store.search()`
+    raises if Qdrant is unreachable, which made a stopped Qdrant/Docker
+    container fail EVERY draft outright, at the very first narrative
+    field, before any LLM call.
+
+    Found by a fair user challenge ("are you sure the webpage will
+    work?") rather than by testing: every zero-cost verification run this
+    session stubbed this function out, which is precisely why the real
+    failure went unnoticed for so long. Stubbing a dependency to test
+    around it is fine; forgetting that the unstubbed path was never
+    exercised is not.
+
+    Degrading to an empty result set means drafts still generate with
+    Qdrant down — slightly less styled after real reference documents,
+    but produced rather than crashed. Callers already handle an empty
+    `reference_chunks` (`reference_text` becomes "" and the leak-detection
+    guardrail is skipped, since with no reference text there is nothing to
+    leak)."""
+    try:
+        return _raw_search(*args, **kwargs)
+    except Exception as e:  # noqa: BLE001 — any retrieval failure is non-fatal by design
+        print(f"[drafting] Retrieval unavailable ({type(e).__name__}) — "
+              f"drafting without reference-document grounding.")
+        return []
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "data" / "generated"
@@ -28,7 +59,7 @@ OUTPUT_DIR = Path(__file__).resolve().parent.parent / "data" / "generated"
 WORK_ORDER_FIELDS = [
     ("work_order_no", "What is the work order number?", None),
     ("work_order_date", "What is the issue date?", str(date.today())),
-    ("issuing_organisation", "Issuing organisation?", "Quality Council of India"),
+    ("issuing_organisation", "Issuing organisation?", "Source Soft Solutions"),
     ("contractor_name", "Who is the contractor / service provider (name)?", None),
     ("contractor_address", "Contractor's address?", None),
     ("project_title", "What is the project / work title?", None),
@@ -48,7 +79,7 @@ WORK_ORDER_FIELDS = [
 MOU_FIELDS = [
     ("mou_no", "What is the MoU reference number?", None),
     ("mou_date", "What is the date of this MoU?", str(date.today())),
-    ("party_a_name", "First party (usually QCI)?", "Quality Council of India"),
+    ("party_a_name", "First party (usually Source Soft Solutions)?", "Source Soft Solutions"),
     ("party_b_name", "Second party (the other organisation)?", None),
     ("party_b_address", "Second party's address?", None),
     ("mou_title", "What is the title / purpose of this MoU?", None),
@@ -454,6 +485,73 @@ Problem statement:
     return _strip_llm_meta_commentary(result)
 
 
+def _generate_mockup_html(kind: str, project_title: str, problem_statement: str,
+                           detail_lines: list[str], accent_hex: str,
+                           font_family: str = "Calibri") -> str:
+    """Ask the model to WRITE the mockup page itself (HTML + inline CSS),
+    so section 14's screens are designed for this specific project rather
+    than being the same fixed skeleton every proposal gets.
+
+    Constraints in the prompt exist for concrete reasons, not politeness:
+    everything must be inline and offline (headless Chrome renders this
+    with no network — a CDN stylesheet or remote image would silently
+    render as an unstyled or broken page), and the width is pinned so the
+    screenshot crops predictably. The caller validates the resulting
+    screenshot and falls back to the built-in template if it doesn't look
+    like a real page — see `html_mockup.render_ai_mockup`."""
+    screen = ("the PUBLIC-FACING HOME PAGE" if kind == "public_home"
+              else "the ADMIN CMS DASHBOARD (logged-in back office)")
+    detail = "\n".join(f"- {d}" for d in detail_lines if d) or "- (infer from the problem statement)"
+
+    prompt = f"""You are designing a realistic UI mock screen for a technical proposal.
+
+Project: {project_title}
+
+Problem statement:
+{problem_statement}
+
+Design {screen} for this project. Real elements it should show:
+{detail}
+
+Output a COMPLETE, SELF-CONTAINED HTML document. Hard requirements:
+- Inline <style> only. NO external CSS, NO CDN links, NO web fonts, NO <img> tags,
+  NO JavaScript. It is rendered offline in a headless browser — anything remote
+  renders broken.
+- Use ONLY CSS for all visuals (colour blocks, borders, shadows, CSS shapes for
+  icons/avatars). Represent images/logos as coloured CSS blocks.
+- Primary/accent colour: #{accent_hex.lstrip('#')}. Font stack: '{font_family}',
+  'Segoe UI', sans-serif.
+- Wrap the page in a realistic browser window frame (title bar with three small
+  circular dots and an address bar showing a plausible URL).
+- Set body{{margin:0;padding:20px;background:#FFFFFF}} and put the frame in a
+  container with width:1160px. Do not exceed that width.
+- Total rendered height must stay under 1500px — design one screenful, not a
+  long scrolling page.
+- Use REAL text from the project above (real nav labels, real module names, real
+  metric labels). No lorem ipsum, no placeholder text like "Item 1".
+
+Output ONLY the raw HTML, starting with <!DOCTYPE html>. No markdown code fences,
+no explanation before or after."""
+
+    raw = _llm_chat(prompt)
+    return _strip_code_fences(raw)
+
+
+def _strip_code_fences(text: str) -> str:
+    """Remove ```html ... ``` wrappers the model adds despite being asked
+    not to — cheaper and more reliable than re-prompting, and a stray fence
+    would otherwise render as literal text at the top of the page."""
+    t = (text or "").strip()
+    if t.startswith("```"):
+        lines = t.splitlines()
+        if lines:
+            lines = lines[1:]                      # drop opening fence (+ any language tag)
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        t = "\n".join(lines).strip()
+    return t
+
+
 def _parse_pipe_rows(raw: str, min_fields: int = 2) -> list[list[str]]:
     """Splits "Field 1 | Field 2 | Field 3" lines into trimmed field lists —
     shared parser for every new pipe-delimited table/flow field. Pipe-
@@ -518,7 +616,7 @@ def _parse_timeline_phases(raw: str) -> list[tuple[str, str, str]]:
     return phases
 
 
-def _inject_generated_content(doc, content: dict, settings) -> None:
+def _inject_generated_content(doc, content: dict, settings, assets_dir=None) -> None:
     """Replaces every `[[MARKER]]` placeholder paragraph (see
     build_technical_proposal_template's docstring for why these are
     plain-text markers, not Jinja fields) with real generated content —
@@ -545,6 +643,19 @@ def _inject_generated_content(doc, content: dict, settings) -> None:
         _add_layered_architecture_diagram, _add_flow_diagram, _add_timeline_diagram,
         _add_sitemap_diagram_image, _add_ui_mockup_image, _add_data_table, _add_feature_grid,
     )
+    from scripts.build_templates import _collect_assets_into
+
+    # The AI-written mock screens are real, standalone web pages — worth
+    # handing back as source, not only flattened into the .docx. Saved
+    # before rendering so the HTML survives even if the screenshot step
+    # later fails validation and falls back to the built-in template.
+    if assets_dir:
+        from pathlib import Path as _P2
+        adir = _P2(assets_dir)
+        adir.mkdir(parents=True, exist_ok=True)
+        for kind, html in (content.get("mockup_html") or {}).items():
+            if html:
+                (adir / f"mockup_{kind}.html").write_text(html, encoding="utf-8")
 
     def _find(marker: str):
         return next((p for p in doc.paragraphs if marker in p.text), None)
@@ -552,7 +663,11 @@ def _inject_generated_content(doc, content: dict, settings) -> None:
     def _image_marker(marker: str, build_fn, *args):
         p = _find(marker)
         if p is not None:
-            build_fn(doc, p, *args, settings)
+            # Scoped per call so each embedded PNG is also copied into the
+            # downloadable assets folder, and the collector is always
+            # cleared afterwards even if this diagram raises.
+            with _collect_assets_into(assets_dir):
+                build_fn(doc, p, *args, settings)
 
     def _table_marker(marker: str, build_fn, *args, **kwargs):
         p = _find(marker)
@@ -580,10 +695,13 @@ def _inject_generated_content(doc, content: dict, settings) -> None:
     nav_items = [name for name, _subs in (content.get("sitemap_pillars") or [])]
     cards = [row[0] for row in (content.get("modules_features") or []) if row]
     sidebar_items = [row[0] for row in (content.get("admin_capabilities") or []) if row]
+    ai_html = content.get("mockup_html") or {}
     _image_marker("[[UI_MOCKUP_HOME]]", _add_ui_mockup_image,
-                   "public_home", content.get("project_title", ""), nav_items, cards, None)
+                   "public_home", content.get("project_title", ""), nav_items, cards, None,
+                   ai_html.get("public_home"))
     _image_marker("[[UI_MOCKUP_ADMIN]]", _add_ui_mockup_image,
-                   "admin_dashboard", content.get("project_title", ""), None, None, sidebar_items)
+                   "admin_dashboard", content.get("project_title", ""), None, None, sidebar_items,
+                   ai_html.get("admin_dashboard"))
 
     _table_marker("[[COMPLIANCE_MATRIX]]", _add_data_table, doc,
                   headers=["#", "Requirement", "Proposed Solution", "Status"],
@@ -892,7 +1010,29 @@ def render_document(session: DraftSession, spec: TemplateSpec,
             "nothing else.")
         amc_scope = _parse_pipe_rows(raw_amc, 2)
 
+        # Section 14's mock screens: ask the model to design each page for
+        # THIS project (HTML it writes itself), rather than filling a fixed
+        # skeleton. Failures here are non-fatal by design — a rejected or
+        # errored mockup falls back to the built-in template downstream, so
+        # a bad HTML generation costs a slightly less bespoke picture, never
+        # a failed draft.
+        accent = getattr(settings, "accent_colour", "1F4E78") if settings else "1F4E78"
+        font = getattr(settings, "font_family", "Calibri") if settings else "Calibri"
+        mockup_html = {}
+        for kind, details in (
+            ("public_home", [p for p, _ in sitemap_pillars] + [r[0] for r in modules_features if r]),
+            ("admin_dashboard", [r[0] for r in admin_capabilities if r] + [r[0] for r in admin_roles if r]),
+        ):
+            try:
+                mockup_html[kind] = _generate_mockup_html(
+                    kind, project_title, problem_statement, details, accent, font)
+            except Exception as e:  # noqa: BLE001 — cosmetic feature, never fail a draft
+                print(f"[mockup] HTML generation failed for {kind} ({type(e).__name__}); "
+                      f"using built-in template.")
+                mockup_html[kind] = None
+
         generated_content = {
+            "mockup_html": mockup_html,
             "layers": diagram_layers, "flow_steps": diagram_steps, "timeline": diagram_timeline,
             "project_title": project_title, "site_name": context.get("client_name", project_title),
             "sitemap_pillars": sitemap_pillars, "compliance_items": compliance_items,
@@ -948,7 +1088,11 @@ def render_document(session: DraftSession, spec: TemplateSpec,
             # produced a fully unrendered document — every {{ field }}
             # showed up as raw text). tpl.docx already holds the rendered
             # document; use it directly.
-            _inject_generated_content(tpl.docx, generated_content, settings)
+            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            _safe = re.sub(r"[^\w\-]", "_", doc_no)
+            _assets = OUTPUT_DIR / f"{spec.filename_prefix}_{_safe}_v{version}_assets"
+            _inject_generated_content(tpl.docx, generated_content, settings,
+                                       assets_dir=_assets)
 
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         safe = re.sub(r"[^\w\-]", "_", doc_no)
@@ -974,7 +1118,7 @@ def render_document(session: DraftSession, spec: TemplateSpec,
 WORK_ORDER_GOODS_FIELDS = [
     ("work_order_no", "What is the work order number?", None),
     ("work_order_date", "What is the issue date?", str(date.today())),
-    ("issuing_organisation", "Issuing organisation?", "Quality Council of India"),
+    ("issuing_organisation", "Issuing organisation?", "Source Soft Solutions"),
     ("supplier_name", "Who is the supplier?", None),
     ("supplier_address", "Supplier's address?", None),
     ("item_description_brief", "Briefly, what goods/items are being supplied? (this gets expanded)", None),
@@ -998,7 +1142,7 @@ WORK_ORDER_GOODS_SPEC = TemplateSpec(
 WORK_ORDER_AMC_FIELDS = [
     ("amc_no", "What is the AMC reference number?", None),
     ("amc_date", "What is the issue date?", str(date.today())),
-    ("issuing_organisation", "Issuing organisation?", "Quality Council of India"),
+    ("issuing_organisation", "Issuing organisation?", "Source Soft Solutions"),
     ("vendor_name", "Who is the maintenance vendor?", None),
     ("vendor_address", "Vendor's address?", None),
     ("equipment_covered_brief", "Briefly, what equipment/systems does this AMC cover? (this gets expanded)", None),
@@ -1022,7 +1166,7 @@ WORK_ORDER_AMC_SPEC = TemplateSpec(
 MOU_INTERNATIONAL_FIELDS = [
     ("mou_no", "What is the MoU reference number?", None),
     ("mou_date", "What is the date of this MoU?", str(date.today())),
-    ("indian_party_name", "Indian party?", "Quality Council of India"),
+    ("indian_party_name", "Indian party?", "Source Soft Solutions"),
     ("foreign_party_name", "Foreign party (organisation name)?", None),
     ("foreign_party_country", "Foreign party's country?", None),
     ("purpose_brief", "Briefly, what is the purpose of this bilateral MoU? (this gets expanded)", None),
@@ -1050,7 +1194,7 @@ MOU_INTERNATIONAL_SPEC = TemplateSpec(
 MOU_INTERDEPT_FIELDS = [
     ("mou_no", "What is the MoU reference number?", None),
     ("mou_date", "What is the date of this MoU?", str(date.today())),
-    ("department_a_name", "First department/body?", "Quality Council of India"),
+    ("department_a_name", "First department/body?", "Source Soft Solutions"),
     ("department_b_name", "Second department/body?", None),
     ("subject_matter_brief", "Briefly, what is this MoU about? (this gets expanded)", None),
     ("responsibilities_brief", "Briefly, what are each party's responsibilities? (this gets expanded)", None),
@@ -1076,7 +1220,7 @@ MOU_INTERDEPT_SPEC = TemplateSpec(
 AGREEMENT_SERVICE_FIELDS = [
     ("agreement_no", "What is the agreement number?", None),
     ("agreement_date", "What is the agreement date?", str(date.today())),
-    ("client_name", "Client?", "Quality Council of India"),
+    ("client_name", "Client?", None),
     ("provider_name", "Service provider?", None),
     ("provider_address", "Provider's address?", None),
     ("service_description_brief", "Briefly, what services are covered? (this gets expanded)", None),
@@ -1105,7 +1249,7 @@ AGREEMENT_SERVICE_SPEC = TemplateSpec(
 AGREEMENT_CONSULTANCY_FIELDS = [
     ("agreement_no", "What is the agreement number?", None),
     ("agreement_date", "What is the agreement date?", str(date.today())),
-    ("client_name", "Client?", "Quality Council of India"),
+    ("client_name", "Client?", None),
     ("consultant_name", "Consultant?", None),
     ("consultant_address", "Consultant's address?", None),
     ("consultancy_scope_brief", "Briefly, what is the scope of this consultancy? (this gets expanded)", None),
@@ -1133,7 +1277,7 @@ AGREEMENT_CONSULTANCY_SPEC = TemplateSpec(
 AGREEMENT_LICENSING_FIELDS = [
     ("agreement_no", "What is the agreement number?", None),
     ("agreement_date", "What is the agreement date?", str(date.today())),
-    ("licensor_name", "Licensor?", "Quality Council of India"),
+    ("licensor_name", "Licensor?", "Source Soft Solutions"),
     ("licensee_name", "Licensee?", None),
     ("licensee_address", "Licensee's address?", None),
     ("ip_description_brief", "Briefly, what IP/materials are being licensed? (this gets expanded)", None),
@@ -1162,7 +1306,7 @@ PROPOSAL_TECHNICAL_FIELDS = [
     ("proposal_no", "What is the proposal number?", None),
     ("proposal_date", "What is the proposal date?", str(date.today())),
     ("submitted_by", "Who is submitting this proposal (bidder name)?", None),
-    ("submitted_to", "Submitted to?", "Quality Council of India"),
+    ("submitted_to", "Submitted to?", None),
     ("project_title", "What is the project title?", None),
     ("technical_approach_brief", "Briefly, what is the proposed technical approach? (this gets expanded)", None),
     ("team_composition_brief", "Briefly, describe the proposed team. (this gets expanded)", None),
@@ -1187,7 +1331,7 @@ PROPOSAL_FINANCIAL_FIELDS = [
     ("proposal_no", "What is the proposal number?", None),
     ("proposal_date", "What is the proposal date?", str(date.today())),
     ("submitted_by", "Who is submitting this proposal (bidder name)?", None),
-    ("submitted_to", "Submitted to?", "Quality Council of India"),
+    ("submitted_to", "Submitted to?", None),
     ("project_title", "What is the project title?", None),
     ("cost_breakdown_brief", "Briefly, summarise the cost breakdown. (this gets expanded)", None),
     ("payment_schedule_brief", "Briefly, describe the proposed payment schedule. (this gets expanded)", None),
@@ -1213,7 +1357,7 @@ PROPOSAL_COMBINED_FIELDS = [
     ("proposal_no", "What is the proposal number?", None),
     ("proposal_date", "What is the proposal date?", str(date.today())),
     ("submitted_by", "Who is submitting this proposal (bidder name)?", None),
-    ("submitted_to", "Submitted to?", "Quality Council of India"),
+    ("submitted_to", "Submitted to?", None),
     ("project_title", "What is the project title?", None),
     ("executive_summary_brief", "Briefly, summarise the overall proposal. (this gets expanded)", None),
     ("approach_and_cost_brief", "Briefly, describe the approach and cost basis together. (this gets expanded)", None),
