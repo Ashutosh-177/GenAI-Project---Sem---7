@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import streamlit as st
 
 from generation.rag import ask
-from generation.drafting import DraftSession, render_document, ALL_TEMPLATE_SPECS
+from generation.drafting import DraftSession, render_document, ALL_TEMPLATE_SPECS, estimate_draft_cost
 from generation.summarize import summarize_document
 from generation.export import docx_to_pdf
 from generation.voice import transcribe_audio
@@ -32,7 +32,7 @@ def _get_template_settings() -> TemplateSettings | None:
 
 
 def render_drafting_tab(state_key: str, fields: list, render_fn, id_field_names: tuple,
-                         generate_label: str, brief_field_names: set):
+                         generate_label: str, brief_field_names: set, spec=None):
     """One drafting flow, parameterized so Work Order and MoU (and any future
     template) share this instead of duplicating ~90 lines of near-identical
     Streamlit code each. `id_field_names` are the 3 fields shown in the
@@ -76,6 +76,17 @@ def render_drafting_tab(state_key: str, fields: list, render_fn, id_field_names:
     st.success("All fields collected.")
     with st.expander("Show collected answers"):
         st.json(st.session_state[answers_key])
+
+    if spec is not None:
+        est = estimate_draft_cost(session, spec)
+        if est["pricing_known"]:
+            st.info(f"💵 Estimated cost: **~${est['estimated_cost_usd']:.2f}** "
+                     f"({est['llm_calls']} AI calls on `{est['model']}`) — a rough estimate, "
+                     f"not a billing guarantee. Leaving more fields blank above increases this; "
+                     f"filling them in yourself lowers it.")
+        else:
+            st.caption(f"~{est['llm_calls']} AI calls on `{est['model']}` "
+                        f"(cost estimate unavailable for this model).")
 
     if st.button(generate_label, type="primary", key=f"{state_key}_generate"):
         with st.spinner("Retrieving similar reference documents and drafting..."):
@@ -729,6 +740,7 @@ with tab_draft:
         id_field_names=id_fields,
         generate_label=f"Generate draft (AI expands {sections_label})",
         brief_field_names=brief_fields,
+        spec=spec,
     )
 
 # ==================== TAB 3: Summarize a Document (Pillar 3) ====================

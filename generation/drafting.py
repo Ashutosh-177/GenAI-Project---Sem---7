@@ -20,6 +20,7 @@ from docxtpl import DocxTemplate
 from generation.llm_client import chat as _llm_chat
 from generation.template_settings import TemplateSettings
 from retrieval.store import search as _raw_search
+from config import ANTHROPIC_MODEL
 
 
 def search(*args, **kwargs):
@@ -419,6 +420,97 @@ nothing else."""
     return _strip_llm_meta_commentary(result)
 
 
+def _generate_dfd_elements(project_title: str, problem_statement: str,
+                            known_facts: dict) -> str:
+    """Derives a real Data Flow Diagram — distinct external entities,
+    numbered processes, and data stores, with each process's input/output
+    reference — instead of the plain numbered-step chain
+    `_generate_flow_steps` produces. Flagged as a known gap in Memory.md
+    ("the flow diagram is still a linear numbered chain, not true DFD
+    Level 0/Level 1 structure") and requested directly afterward.
+
+    Kept as a separate function from `_generate_flow_steps` rather than a
+    shared one with a flag: `core_module_flow` and `security_flow` (which
+    still use the plain chain) are genuinely just ordered step lists, not
+    data flows with actors and storage — forcing DFD structure onto those
+    would be inventing entities/stores that don't mean anything there."""
+    facts_block = ""
+    if known_facts:
+        facts_lines = "\n".join(f"- {label}: {value}" for label, value in known_facts.items())
+        facts_block = f"\nKnown facts — use these names EXACTLY as given, verbatim:\n{facts_lines}\n"
+
+    prompt = f"""Based on this problem statement for a technical proposal titled \
+"{project_title}", design a Data Flow Diagram for the single most important process \
+the solution needs to support.
+{facts_block}
+Problem statement:
+{problem_statement}
+
+Output ONLY lines in one of these three exact formats, pipe-separated, no other text:
+ENTITY | <short name>
+STORE | <Dn> | <short name>
+PROCESS | <n.0> | <short label, 2-5 words> | <input reference or blank> | <output reference or blank>
+
+Where an input/output reference is either blank, an entity name from an ENTITY line \
+above, or a store id (D1, D2, ...) from a STORE line above — exactly as written there.
+
+Rules:
+- List all ENTITY lines first, then all STORE lines, then PROCESS lines in execution order.
+- 1-2 external entities (people or systems outside this solution — "Citizen", \
+"Ward Officer", not internal components).
+- 1-2 data stores (what gets read or written — "Grievance Records", not a technology name).
+- 4-6 processes.
+- The FIRST process's input reference should usually be the entity that triggers the flow.
+- The LAST process's output reference should usually be the entity that receives the outcome.
+- At least one middle process should reference a store it reads or writes.
+- Every input/output reference MUST exactly match an entity name or store id declared above.
+
+Example:
+ENTITY | Citizen
+STORE | D1 | Grievance Records
+PROCESS | 1.0 | Submit grievance | Citizen | D1
+PROCESS | 2.0 | Validate and classify | | D1
+PROCESS | 3.0 | Assign to ward officer | | D1
+PROCESS | 4.0 | Track resolution | | D1
+PROCESS | 5.0 | Notify outcome | | Citizen
+
+Be specific to what the problem statement actually describes. No preamble, no \
+explanation — just the ENTITY/STORE/PROCESS lines, nothing else."""
+
+    result = _llm_chat(prompt)
+    return _strip_llm_meta_commentary(result)
+
+
+def _parse_dfd_elements(raw: str) -> tuple[list[str], list[tuple[str, str, str, str]], dict[str, str]]:
+    """Parses the ENTITY/STORE/PROCESS lines `_generate_dfd_elements`
+    produces (or a user hand-typed in the same format) into the
+    `(entities, processes, stores)` shape `render_dfd_diagram` expects.
+    Malformed lines are dropped rather than raising — a diagram with one
+    missing process is better than a draft that fails outright over a
+    single bad line."""
+    entities: list[str] = []
+    stores: dict[str, str] = {}
+    processes: list[tuple[str, str, str, str]] = []
+    for line in (raw or "").strip().splitlines():
+        line = line.strip().lstrip("-•").strip()
+        if not line or "|" not in line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        tag = parts[0].strip().upper()
+        if tag == "ENTITY" and len(parts) >= 2 and parts[1]:
+            entities.append(parts[1])
+        elif tag == "STORE" and len(parts) >= 3 and parts[1] and parts[2]:
+            stores[parts[1]] = parts[2]
+        elif tag == "PROCESS" and len(parts) >= 3:
+            num = parts[1]
+            label = parts[2]
+            in_ref = parts[3] if len(parts) >= 4 else ""
+            out_ref = parts[4] if len(parts) >= 5 else ""
+            if label:
+                processes.append((num, label, in_ref, out_ref))
+    return entities, processes, stores
+
+
 def _generate_timeline_phases(project_title: str, problem_statement: str,
                                known_facts: dict) -> str:
     """Same derive-from-the-problem-statement reasoning as
@@ -640,7 +732,7 @@ def _inject_generated_content(doc, content: dict, settings, assets_dir=None) -> 
     from pathlib import Path as _P
     sys.path.insert(0, str(_P(__file__).resolve().parent.parent))
     from scripts.build_templates import (
-        _add_layered_architecture_diagram, _add_flow_diagram, _add_timeline_diagram,
+        _add_layered_architecture_diagram, _add_flow_diagram, _add_timeline_diagram, _add_dfd_diagram,
         _add_sitemap_diagram_image, _add_ui_mockup_image, _add_data_table, _add_feature_grid,
     )
     from scripts.build_templates import _collect_assets_into
@@ -681,7 +773,9 @@ def _inject_generated_content(doc, content: dict, settings, assets_dir=None) -> 
 
     _image_marker("[[ARCHITECTURE_DIAGRAM]]", _add_layered_architecture_diagram,
                    content.get("layers") or [])
-    _image_marker("[[DATA_FLOW_DIAGRAM]]", _add_flow_diagram, content.get("flow_steps") or [])
+    _image_marker("[[DATA_FLOW_DIAGRAM]]", _add_dfd_diagram,
+                   content.get("dfd_entities") or [], content.get("dfd_processes") or [],
+                   content.get("dfd_stores") or {})
     _image_marker("[[TIMELINE_DIAGRAM]]", _add_timeline_diagram, content.get("timeline") or [])
     _image_marker("[[SITEMAP_DIAGRAM]]", _add_sitemap_diagram_image,
                    content.get("site_name", ""), content.get("sitemap_pillars") or [])
@@ -820,6 +914,73 @@ def _get_build_info() -> dict:
     return info
 
 
+# Technical Proposal's structured fields that trigger an extra LLM call ONLY
+# when left blank (see the `_structured()` closure and the three older-style
+# `context.pop(...)` calls inside render_document's technical_proposal
+# branch) — kept here as one list so `estimate_draft_cost` doesn't have to
+# guess. If a new structured field is added to that branch, add its name
+# here too, or the estimate will silently under-count it.
+_TP_STRUCTURED_FIELD_NAMES = (
+    "architecture_layers", "data_flow_steps", "implementation_timeline",
+    "sitemap_pillars", "compliance_items", "modules_features", "core_module_flow",
+    "admin_capabilities", "admin_roles", "enquiry_channels", "security_flow",
+    "security_areas", "seo_performance_items", "amc_scope",
+)
+
+# $ per million tokens, (input, output) — from a live pricing check (see
+# Memory.md), not memorised. Update this table if Anthropic repricing
+# changes it; this estimator is informational, never a billing source of
+# truth, and says so in its own output.
+_MODEL_PRICING_PER_M_TOKENS = {
+    "claude-opus-5": (5.0, 25.0),
+    "claude-sonnet-5": (2.0, 10.0),
+}
+_AVG_CALL_INPUT_TOKENS = 2000    # a narrative/structured-field call, grounded in brief + context
+_AVG_CALL_OUTPUT_TOKENS = 600
+_MOCKUP_CALL_INPUT_TOKENS = 1500   # the two HTML-mockup calls run heavier output than a text field
+_MOCKUP_CALL_OUTPUT_TOKENS = 1800
+
+
+def estimate_draft_cost(session: DraftSession, spec: TemplateSpec) -> dict:
+    """Rough PRE-generation estimate of how many LLM calls a real
+    render_document() call would make for the answers currently in
+    `session`, and what that costs at the configured model's published
+    rate. Purely local — reads `session.answers`, makes no API call.
+
+    A real user asked for a cost estimate before Generate, having had to
+    ask in chat every time otherwise. Narrative fields always cost one
+    call each; for Technical Proposal, structured fields (architecture
+    layers, sitemap, etc.) cost one call each ONLY if left blank — filling
+    them in is the cheaper path, which is exactly what this estimate makes
+    visible by changing live as fields are answered.
+
+    Deliberately approximate (fixed average token counts per call, not a
+    real tokenizer count of the actual brief text) — good enough to show
+    "roughly $0.25" vs "roughly $2", not a precise billing figure. Labelled
+    as an estimate everywhere it's surfaced for that reason."""
+    calls = len(spec.narrative_fields)
+    mockup_calls = 0
+    if spec.key == "technical_proposal":
+        for name in _TP_STRUCTURED_FIELD_NAMES:
+            if not (session.answers.get(name) or "").strip():
+                calls += 1
+        mockup_calls = 2  # public_home + admin_dashboard mock screens, always run
+
+    input_tok = calls * _AVG_CALL_INPUT_TOKENS + mockup_calls * _MOCKUP_CALL_INPUT_TOKENS
+    output_tok = calls * _AVG_CALL_OUTPUT_TOKENS + mockup_calls * _MOCKUP_CALL_OUTPUT_TOKENS
+
+    in_rate, out_rate = _MODEL_PRICING_PER_M_TOKENS.get(
+        ANTHROPIC_MODEL, _MODEL_PRICING_PER_M_TOKENS["claude-sonnet-5"])
+    cost = (input_tok / 1_000_000) * in_rate + (output_tok / 1_000_000) * out_rate
+
+    return {
+        "model": ANTHROPIC_MODEL,
+        "llm_calls": calls + mockup_calls,
+        "estimated_cost_usd": round(cost, 2),
+        "pricing_known": ANTHROPIC_MODEL in _MODEL_PRICING_PER_M_TOKENS,
+    }
+
+
 def render_document(session: DraftSession, spec: TemplateSpec,
                     settings: TemplateSettings | None = None) -> Path:
     """The one render function every template uses. Replaces per-template
@@ -898,10 +1059,10 @@ def render_document(session: DraftSession, spec: TemplateSpec,
             raw_layers = _generate_architecture_layers(project_title, problem_statement, known_facts)
         diagram_layers = _parse_architecture_layers(raw_layers)
 
-        raw_steps = context.pop("data_flow_steps", "")
-        if not raw_steps.strip():
-            raw_steps = _generate_flow_steps(project_title, problem_statement, known_facts)
-        diagram_steps = _parse_flow_steps(raw_steps)
+        raw_dfd = context.pop("data_flow_steps", "")
+        if not raw_dfd.strip():
+            raw_dfd = _generate_dfd_elements(project_title, problem_statement, known_facts)
+        dfd_entities, dfd_processes, dfd_stores = _parse_dfd_elements(raw_dfd)
 
         raw_timeline = context.pop("implementation_timeline", "")
         if not raw_timeline.strip():
@@ -1033,7 +1194,8 @@ def render_document(session: DraftSession, spec: TemplateSpec,
 
         generated_content = {
             "mockup_html": mockup_html,
-            "layers": diagram_layers, "flow_steps": diagram_steps, "timeline": diagram_timeline,
+            "layers": diagram_layers, "timeline": diagram_timeline,
+            "dfd_entities": dfd_entities, "dfd_processes": dfd_processes, "dfd_stores": dfd_stores,
             "project_title": project_title, "site_name": context.get("client_name", project_title),
             "sitemap_pillars": sitemap_pillars, "compliance_items": compliance_items,
             "modules_features": modules_features, "core_module_flow": core_module_flow,
@@ -1407,9 +1569,10 @@ TECHNICAL_PROPOSAL_FIELDS = [
      "generated automatically from your problem statement above.", ""),
     ("data_flow_intro_brief", "Briefly introduce your primary data/process flow in a sentence. (this gets expanded)", None),
     ("data_flow_steps",
-     "List the key steps in your primary process flow, one per line, in order "
-     "(e.g. 'User submits enquiry form') — or leave blank and this will be generated "
-     "automatically from your problem statement above.", ""),
+     "Describe your Data Flow Diagram as 'ENTITY | name', 'STORE | Dn | name' and "
+     "'PROCESS | n.0 | label | input ref | output ref' lines (input/output ref is "
+     "blank, an entity name, or a store id) — or leave blank and this will be "
+     "generated automatically from your problem statement above.", ""),
     ("modules_intro_brief", "Briefly introduce the public website's modules and features in a sentence. (this gets expanded)", None),
     ("modules_features",
      "List the public website's modules, one per line, as 'Module | What the user gets' — "

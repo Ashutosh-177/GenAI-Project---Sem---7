@@ -88,8 +88,48 @@ def _resolve_signature_image(settings: TemplateSettings) -> Path | None:
     if none was uploaded — unlike the logo/logo-mark, there's no built-in
     default here (no real person's signature ships with this repo)."""
     if settings.signature_image_path and Path(settings.signature_image_path).exists():
-        return Path(settings.signature_image_path)
+        return _orient_signature_image(Path(settings.signature_image_path))
     return None
+
+
+def _orient_signature_image(raw_path: Path) -> Path:
+    """Corrects orientation before embedding — a real user reported the
+    signature always landing vertical in the document no matter how they
+    uploaded it. Two real causes, both fixed here:
+
+    1. A phone-camera photo carries an EXIF Orientation tag telling
+       viewers to rotate the image on DISPLAY, without the pixel data
+       itself being rotated. The phone's gallery honours that tag and
+       shows it upright; `run.add_picture()` embeds the raw pixel bytes,
+       and Word does NOT apply EXIF orientation when displaying an
+       embedded image — so a photo that looks correctly horizontal on the
+       phone embeds using its actual (portrait) pixel data.
+    2. Beyond EXIF, a signature is virtually always meant to be read
+       horizontally. If the pixel data is STILL taller than wide after
+       EXIF correction, rotate it 90 degrees to landscape as a fallback —
+       correct for the overwhelmingly common case (a signature scan/photo
+       captured in portrait), and a real signature is never intentionally
+       a tall narrow mark the way a logo mark might be.
+
+    Always writes a freshly oriented copy rather than trying to detect
+    whether a change was needed and skip the write — the file is tiny, so
+    the extra save is cheap, and it avoids depending on PIL's
+    exif_transpose() returning the identical object for a no-op case
+    (it doesn't; it always returns a copy), which would make "did this
+    change?" unreliable to check directly."""
+    from PIL import Image, ImageOps
+    import tempfile
+
+    img = Image.open(raw_path)
+    corrected = ImageOps.exif_transpose(img)
+    if corrected.width < corrected.height:
+        corrected = corrected.rotate(-90, expand=True)
+
+    out_path = Path(tempfile.gettempdir()) / f"signature_oriented_{raw_path.stem}.png"
+    save_mode = "RGBA" if corrected.mode in ("RGBA", "LA", "P") else "RGB"
+    corrected.convert(save_mode).save(out_path)
+    img.close()
+    return out_path
 
 
 def _add_bottom_rule(paragraph, settings: TemplateSettings | None = None):
@@ -1337,6 +1377,26 @@ def _add_flow_diagram(doc, paragraph, steps: list[str], settings: TemplateSettin
     _embed_diagram_image(
         paragraph, render_flow_diagram, steps,
         tmp_name="flow_diagram.png",
+        accent_hex=s.accent_colour, font_family=s.font_family,
+    )
+
+
+def _add_dfd_diagram(doc, paragraph, entities: list[str], processes: list[tuple[str, str, str, str]],
+                      stores: dict[str, str], settings: TemplateSettings | None = None):
+    """Renders a real Data Flow Diagram (distinct entity/process/data-store
+    shapes, not the plain numbered chain `_add_flow_diagram` draws) and
+    embeds it in place of the `[[DATA_FLOW_DIAGRAM]]` marker paragraph —
+    section 7 specifically; `_add_flow_diagram` (used by Core Platform
+    Module and Security flows) is unrelated to this and unchanged, since
+    those really are just ordered step lists, not data flows with
+    actors/storage."""
+    s = settings or TemplateSettings()
+    if not processes:
+        return
+    from generation.diagram_render import render_dfd_diagram
+    _embed_diagram_image(
+        paragraph, render_dfd_diagram, entities, processes, stores,
+        tmp_name="dfd_diagram.png",
         accent_hex=s.accent_colour, font_family=s.font_family,
     )
 

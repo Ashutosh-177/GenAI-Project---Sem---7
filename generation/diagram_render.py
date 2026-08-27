@@ -266,6 +266,184 @@ def render_flow_diagram(steps: list[str], out_path: str | Path,
     return out_path
 
 
+def _open_store_box(ax, x, y, w, h, edge_hex, fill_hex="FFFFFF"):
+    """Gane-Sarson data-store symbol: a box with the right edge left open
+    (top, left and bottom drawn; no right border) — the standard DFD
+    convention for "data at rest", visually distinct from both the closed
+    rounded process boxes and the closed sharp entity rectangles."""
+    c = _hex(edge_hex)
+    ax.add_patch(Rectangle((x, y), w, h, linewidth=0, facecolor=_hex(fill_hex)))
+    ax.plot([x, x + w], [y, y], color=c, linewidth=1.3)
+    ax.plot([x, x + w], [y + h, y + h], color=c, linewidth=1.3)
+    ax.plot([x, x], [y, y + h], color=c, linewidth=1.3)
+
+
+def render_dfd_diagram(entities: list[str], processes: list[tuple[str, str, str, str]],
+                        stores: dict[str, str], out_path: str | Path,
+                        accent_hex: str = "1F4E78", font_family: str = "Calibri",
+                        cols_per_row: int = 3) -> Path:
+    """A real Data Flow Diagram with three visually distinct shapes, not
+    the uniform numbered-box chain `render_flow_diagram` draws — flagged
+    as a known gap in Memory.md ("true DFD notation... is a different
+    diagram grammar than the numbered chain this template uses
+    everywhere") and requested directly by the user afterward.
+
+    - PROCESSES: rounded boxes (same visual language as the rest of this
+      module), numbered n.0, in a left-to-right chain that wraps onto
+      further rows — reuses render_flow_diagram's exact grid/arrow layout.
+    - ENTITIES (external actors — "Citizen", "Ward Officer"): sharp-cornered
+      grey rectangles. Only the process chain's start and end are checked
+      for an entity reference, matching the common DFD Level-1 shape of
+      "actor triggers the process, actor receives the outcome" — a process
+      in the MIDDLE of the chain isn't given its own entity box, since
+      that would need real graph layout rather than this linear chain.
+    - DATA STORES ("D1 Grievance Database"): open-ended boxes (Gane-Sarson
+      convention — see `_open_store_box`). Each unique store is drawn once,
+      attached below the FIRST process that references it; later
+      references to the same store don't redraw it, to avoid cluttering a
+      proposal diagram with every read/write edge a rigorous systems-
+      analysis DFD would show.
+
+    `processes`: list of (number, label, in_ref, out_ref) — `in_ref`/
+    `out_ref` are either blank, an entity name, or a store id ("D1")
+    matching a key in `stores`."""
+    out_path = Path(out_path)
+    if not processes:
+        raise ValueError("render_dfd_diagram: no processes given")
+
+    entity_set = {e.strip().lower() for e in entities}
+
+    def _is_entity(ref: str) -> bool:
+        return bool(ref) and ref.strip().lower() in entity_set
+
+    def _matching_store(ref: str) -> str | None:
+        if not ref:
+            return None
+        ref_norm = ref.strip().lower()
+        for sid in stores:
+            if sid.strip().lower() == ref_norm:
+                return sid
+        return None
+
+    # Build the chain: N processes, plus one trailing "entity" pseudo-box
+    # if the last process outputs to a declared entity — reuses the exact
+    # same grid/wrap/arrow logic as render_flow_diagram by treating that
+    # trailing entity as just another box in the sequence, styled
+    # differently at draw time.
+    chain = [("process", num, label) for num, label, _in, _out in processes]
+    out_ref = processes[-1][3]
+    if _is_entity(out_ref):
+        chain.append(("entity", "", out_ref))
+
+    fig_w = 7.4
+    n = len(chain)
+    nrows = (n + cols_per_row - 1) // cols_per_row
+    box_w, box_h = 1.95, 1.05
+    gap_x = 0.55
+    row_gap = 0.95  # taller than render_flow_diagram's — leaves room for a store band between rows
+    margin = 0.25
+
+    in_ref0 = processes[0][2]
+    has_input_entity = _is_entity(in_ref0)
+    entity_band_h = 0.85 if has_input_entity else 0.0
+
+    total_row_w = cols_per_row * box_w + (cols_per_row - 1) * gap_x
+    x_start = (fig_w - total_row_w) / 2
+    fig_h = margin * 2 + entity_band_h + nrows * box_h + (nrows - 1) * row_gap
+
+    warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
+    fp_bold = FontProperties(family=font_family, weight="bold")
+    fp_reg = FontProperties(family=font_family)
+    palette = _derive_palette(accent_hex)
+
+    fig, ax = _fig(fig_w, fig_h)
+    top = margin + entity_band_h
+
+    centers = []
+    for i, (kind, num, label) in enumerate(chain):
+        row, col = divmod(i, cols_per_row)
+        x = x_start + col * (box_w + gap_x)
+        y = top + row * (box_h + row_gap)
+        if kind == "entity":
+            ax.add_patch(Rectangle((x, y), box_w, box_h, linewidth=1.3,
+                                    edgecolor=_hex("6B7280"), facecolor=_hex("F3F4F6")))
+            lines = _wrap(label, box_w - 0.3, 9.5)
+            ty = y + box_h / 2 - (len(lines) - 1) * 0.11
+            for line in lines:
+                ax.text(x + box_w / 2, ty, line, fontsize=9.5, color=_hex(_TEXT_DARK),
+                         fontproperties=fp_bold, ha="center", va="center")
+                ty += 0.22
+        else:
+            _rounded_box(ax, x, y, box_w, box_h, fill=accent_hex, edge=accent_hex)
+            lines = _wrap(label, box_w - 0.3, 9.5)
+            ty = y + box_h / 2 - (len(lines) - 1) * 0.11
+            ax.text(x + box_w / 2, y + 0.18, num, fontsize=8.5, color="#FFFFFF",
+                     fontproperties=fp_reg, ha="center", va="top", alpha=0.85)
+            for line in lines:
+                ax.text(x + box_w / 2, ty, line, fontsize=9.5, color="#FFFFFF",
+                         fontproperties=fp_bold, ha="center", va="center")
+                ty += 0.22
+        centers.append((x, y, box_w, box_h, row, col))
+
+    for i in range(n - 1):
+        x1, y1, w1, h1, r1, c1 = centers[i]
+        x2, y2, w2, h2, r2, c2 = centers[i + 1]
+        if r1 == r2:
+            _right_arrow(ax, x1 + w1, x2, y1 + h1 / 2, colour=accent_hex)
+        else:
+            _diagonal_arrow(ax, x1 + w1 / 2, y1 + h1, x2 + w2 / 2, y2, colour=accent_hex)
+
+    # Input entity, above the first process
+    if has_input_entity:
+        x0, y0, w0, h0, _, _ = centers[0]
+        ent_w, ent_h = 1.6, 0.55
+        ex = x0 + w0 / 2 - ent_w / 2
+        ey = margin
+        ax.add_patch(Rectangle((ex, ey), ent_w, ent_h, linewidth=1.3,
+                                edgecolor=_hex("6B7280"), facecolor=_hex("F3F4F6")))
+        for line in _wrap(in_ref0, ent_w - 0.2, 9.0):
+            ax.text(ex + ent_w / 2, ey + ent_h / 2, line, fontsize=9.0, color=_hex(_TEXT_DARK),
+                     fontproperties=fp_bold, ha="center", va="center")
+        _down_arrow(ax, x0 + w0 / 2, ey + ent_h, y0, colour="6B7280")
+
+    # One box per unique data store, attached below the first process (by
+    # chain order) that references it — either as input (arrow store ->
+    # process) or output (arrow process -> store).
+    drawn_stores = set()
+    store_w, store_h = 1.5, 0.4
+    for idx, (num, label, in_ref, out_ref) in enumerate(processes):
+        for ref, is_input in ((in_ref, True), (out_ref, False)):
+            sid = _matching_store(ref)
+            if sid is None or sid in drawn_stores:
+                continue
+            drawn_stores.add(sid)
+            x, y, w, h, row, col = centers[idx]
+            sx = x + w / 2 - store_w / 2
+            sy = y + h + 0.2
+            colour = palette[len(drawn_stores) % len(palette)]
+            _open_store_box(ax, sx, sy, store_w, store_h, edge_hex=colour)
+            store_label = f"{sid}  {stores[sid]}"
+            for line in _wrap(store_label, store_w - 0.1, 7.5):
+                ax.text(sx + store_w / 2, sy + store_h / 2, line, fontsize=7.5,
+                         color=_hex(colour), fontproperties=fp_bold, ha="center", va="center")
+            if is_input:
+                # Arrow points UP into the process (store -> process: the
+                # process reads this store) — from=sy (store), to=y+h
+                # (process's bottom edge), so the arrowhead lands at the
+                # process despite the helper's "down" name (it just draws
+                # from its first y to its second; which end gets the
+                # arrowhead is what makes this read as "into the process").
+                _down_arrow(ax, sx + store_w * 0.3, sy, y + h, colour=colour)
+            else:
+                # Arrow points DOWN into the store (process -> store: the
+                # process writes this store).
+                _down_arrow(ax, sx + store_w * 0.7, y + h, sy, colour=colour)
+
+    fig.savefig(out_path, dpi=200, facecolor="white")
+    plt.close(fig)
+    return out_path
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Timeline — stacked phase cards with a week-range header, matching the
 # "Implementation Methodology & Timeline" reference layout

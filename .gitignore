@@ -15,6 +15,9 @@ data/voice_test/*
 !data/voice_test/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+data/template_presets/logos/*
+!data/template_presets/logos/.gitkeep
+/signature.png
 
 *.log
 qdrant_storage/

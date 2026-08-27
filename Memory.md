@@ -1827,6 +1827,119 @@ the paid run produced.
 **Lesson**: a fixed test fixture (always 5 pillars) hid a layout bug that
 only appears at a count the model chose on its own. Varying-N cases are
 worth testing at the boundary, not just at the convenient value.
+
+### #4 and #5 from the improvement list, both built (25 Aug 2026)
+
+User asked which two of a 5-item improvement list to build; picked the
+cost estimate and true DFD notation.
+
+**#4 — live cost estimate before Generate**: `estimate_draft_cost()`
+(drafting.py, pure local function, no API call) counts what a real
+`render_document()` call would actually do for the CURRENT answers —
+every narrative field always costs one call; for Technical Proposal, each
+of the 14 structured fields (`_TP_STRUCTURED_FIELD_NAMES` — kept as one
+list with an explicit comment that it must stay in sync with the
+`_structured()`/`context.pop()` calls it mirrors) costs one call ONLY if
+left blank, plus 2 fixed calls for the mock-screen HTML. Priced at
+`config.ANTHROPIC_MODEL`'s published per-token rate (Opus/Sonnet only —
+unknown models fall back to Sonnet's rate rather than guessing). Wired
+into `demo_app.py` right before the Generate button via a new `spec`
+parameter threaded through `render_drafting_tab` (previously only had
+`fields`, not the full `TemplateSpec` needed to count narrative fields).
+Verified free: all-blank Technical Proposal estimates 32 calls/$0.34,
+filling in all 14 structured fields drops it to 18 calls/$0.20, a Work
+Order (1 narrative field, no structured fields) estimates $0.01 — same
+ballpark as the real $0.25 run from earlier today, close enough for an
+estimate that's explicitly labelled as one, never a billing guarantee.
+
+**#5 — real DFD notation**: `render_dfd_diagram()` (diagram_render.py) draws
+three actually-distinct shapes — sharp grey rectangles for external
+entities, the existing rounded accent-coloured boxes for numbered
+processes, and Gane-Sarson open-ended boxes (`_open_store_box` — three
+sides drawn, right edge deliberately left open, the standard "data at
+rest" DFD symbol) for data stores — instead of the uniform numbered chain
+`render_flow_diagram` draws for everything. Reuses that same chain's
+grid/wrap/arrow logic for the process sequence (a trailing output entity
+is literally appended as one more item in the chain list, styled
+differently at draw time, rather than needing separate layout code);
+input entity goes above the first process; each unique store is drawn
+once, attached below the first process that references it, with the
+connector arrow direction depending on whether that process reads (arrow
+into the process) or writes (arrow into the store) it — deliberately not
+attempting a full graph-layout engine for every read/write edge a
+rigorous systems-analysis DFD would show, since this is a proposal
+diagram, not one.
+
+New `_generate_dfd_elements()`/`_parse_dfd_elements()` (drafting.py) ask
+for and parse `ENTITY | name`, `STORE | Dn | name`,
+`PROCESS | n.0 | label | in_ref | out_ref` lines — kept as a genuinely
+separate function from `_generate_flow_steps` (not a shared one with a
+flag) because `core_module_flow`/`security_flow` are real ordered step
+lists with no actors or storage; forcing DFD structure onto those would
+mean inventing entities/stores that don't mean anything there. New
+`_add_dfd_diagram` (build_templates.py) wired to the
+`[[DATA_FLOW_DIAGRAM]]` marker specifically — `_add_flow_diagram` is
+untouched and still serves Core Platform Module / Security flow exactly
+as before. `data_flow_steps`' field help text updated to the new
+pipe-format for the (uncommon) case someone hand-types it instead of
+leaving it blank.
+
+**Real bug caught while drafting the renderer**, before it ever ran: the
+first store-connector arrow implementation drew the arrow twice — once
+via `_down_arrow` and then a second, redundant `ax.annotate(...)` call
+with slightly different coordinates, leftover from iterating on the
+approach without removing the earlier attempt. Caught on re-reading the
+code, not from a bad render — cleaned up to one arrow per connector before
+ever testing it.
+
+Verified free at every layer: parser tested standalone against realistic
+generator output, `render_dfd_diagram` tested standalone (correct entity/
+process/store shapes and arrow directions, visually confirmed), then the
+full pipeline end-to-end with the LLM stubbed to return the exact DFD
+format for the data-flow prompt specifically — renders correctly embedded
+in a real document at section 7, no crash, no regression to the untouched
+Core Platform Module / Security flow sections.
+
+### Signature image always rendered vertically regardless of upload orientation (fixed)
+User-reported: an uploaded landscape (horizontal) signature photo always
+came out rotated 90° in the generated document. Root cause: `add_picture()`
+embeds raw pixel bytes only — Word does not apply a JPEG's EXIF orientation
+tag on display (unlike phone galleries/most photo viewers, which do), so a
+phone-captured signature saved with an EXIF rotation flag renders sideways.
+
+Fixed with `_orient_signature_image(raw_path) -> Path` in
+`scripts/build_templates.py`, called from `_resolve_signature_image()`:
+first applies `PIL.ImageOps.exif_transpose()` (handles the real EXIF case),
+then if the result is still portrait (`width < height`) — no EXIF tag but
+genuinely captured sideways — force-rotates 90° as a fallback. Always
+writes a normalized copy to a temp path rather than trying to detect "no
+change needed," since `exif_transpose()` already returns a copy regardless.
+
+Verified with 3 synthetic test cases (all corrected to landscape) plus a
+full end-to-end zero-cost render showing the corrected signature displaying
+correctly above "Name: Test User / Designation: Developer" in the actual
+PDF signature block. First test image built for this was itself flawed
+(content clipped because the drawn canvas was narrower than intended) —
+caught and rebuilt before trusting the result, not reported as a pass on
+a bad test.
+
+### 10-template visual spot-check, remaining templates never before inspected (done)
+Explicit follow-up to the signature fix: "test all the other 10 templates."
+Rebuilt all 13 templates clean (`scripts/build_templates.py`), then a
+zero-cost stubbed render of all 12 non-Technical-Proposal specs confirmed
+no exceptions across the board. Of those, 4 had never been visually
+inspected in any prior session (`work_order_goods`, `mou_international`,
+`agreement_consultancy`, `proposal_combined`) — rendered each with
+realistic test data, converted to PDF, and read both page 1 and the last
+(signature/footer) page as PNG screenshots.
+
+All 4 confirmed correct: consistent Source Soft Solutions branding and
+logo placement, correct document titles, correct counterparty/signatory
+names in every signature block, and — notably — `mou_international`'s
+"FOR AND ON BEHALF OF" line correctly read "Source Soft Solutions" (not
+the old "Quality Council of India" default), reconfirming the earlier
+13-hardcoded-QCI-default fix holds in a template that had never
+specifically been checked before. No new bugs found in this pass.
 ---
 
 ## 9. Where to look for more detail
