@@ -1,186 +1,161 @@
-# QCI AI Knowledge Hub — PoC
+# AI Drafting & Knowledge Hub
 
-Prototype for QCI's RFP (ref. QCI/0826/550): AI-powered Knowledge Hub & Workflow
-Automation Platform. Scoped to **Pillars 2–4** (Knowledge Repository, AI Outputs,
-Deployment/Ops) — login/RBAC (Pillar 1) deliberately deferred.
+An AI-powered platform that (1) answers questions over your own document corpus with
+enforced citations, and (2) drafts formatted, print-ready legal/business documents —
+Work Orders, MoUs, Agreements, and Proposals — complete with auto-generated
+architecture/data-flow diagrams and AI-designed UI mockups.
+
+Built originally as a PoC for a government RFP (Quality Council of India, tender ref.
+QCI/0826/550), then pivoted into **Source Soft Solutions'** own branded drafting
+platform. Both identities are supported via `generation/template_settings.py`; the
+default branding is Source Soft Solutions.
+
+## What it does
+
+- **Conversational Q&A (RAG)** — ask a question in plain English, get an answer
+  grounded in your ingested documents with numbered citations back to the source
+  chunk. Three-layer guardrail against hallucination (see below).
+- **Document drafting** — 13 templates across 4 document types (Work Order, MoU,
+  Agreement, Proposal). Give it a short brief; Claude expands it into full narrative
+  sections, grounded by retrieval and by explicit "known facts" (party names, project
+  title) so it can't invent organisation names.
+- **Diagrams from content, not hand-drawn** — architecture layer diagrams and
+  Gane-Sarson data-flow diagrams (entities/processes/data stores) are derived from
+  the proposal's own content and rendered deterministically with matplotlib, so text
+  never garbles the way an image-generation model's text sometimes does.
+- **AI-generated UI mockups** — for the Technical Proposal template, Claude writes a
+  real self-contained HTML page for the product's home/admin screens, which gets
+  screenshotted (headless Chrome) and embedded as an image — validated before use,
+  with a template-based fallback if the screenshot doesn't look like a real page.
+- **Document summarization** — map-reduce summarization for large ingested documents.
+- **Voice input** — speech-to-text via faster-whisper (English, validated at 97%
+  character accuracy; Hindi/Hinglish was built, tested against real recordings, found
+  unreliable, and deliberately dropped rather than shipped broken).
+- **PDF export** — one-click DOCX → PDF via Word automation.
+- **Cost estimate before you generate** — drafting calls a paid LLM API; the UI shows
+  an estimated cost (based on which fields will trigger a call) before you commit.
 
 ## Stack
 
-- **LLM (local, non-Chinese):** Llama 3.2 3B via Ollama for dev iteration.
-  Swap to Llama 3.1/3.3 or Mistral for quality checks once dev machine allows,
-  and to AWS Bedrock / EC2-GPU inside QCI's account for actual deployment.
-- **OCR:** Tesseract (printed text)
-- **PDF/Doc parsing:** pdfplumber, PyMuPDF, python-docx, openpyxl, python-pptx
-- **Doc generation:** docxtpl (templated `.docx` output)
-- **Embeddings:** sentence-transformers (target: multilingual-e5-large)
-- **Vector store:** Qdrant (client installed; server run separately, see below)
-- **RAG orchestration:** llama-index
-- **API:** FastAPI + uvicorn
+| Purpose | Choice |
+|---|---|
+| LLM (drafting, Q&A, summarization, classification) | Claude (Anthropic API) — model configurable via `.env` |
+| Embeddings | `intfloat/multilingual-e5-large` (local, sentence-transformers) |
+| Vector store | Qdrant (local embedded mode, or a Docker container) |
+| OCR | Tesseract |
+| Voice transcription | faster-whisper |
+| Document generation | docxtpl (Jinja-templated `.docx`) + python-docx for layout |
+| Diagram rendering | matplotlib (deterministic, not image-generation) |
+| AI mockup screenshots | headless Chrome |
+| PDF export | docx2pdf (Word COM automation) |
+| Demo UI | Streamlit |
 
-## Setup (already done for this machine)
+Embeddings, vector search, and voice transcription run locally. Only LLM reasoning
+calls (drafting text, Q&A answers, summaries, classification) go to the Anthropic API.
 
-```
+## Setup
+
+```powershell
 python -m venv venv
 venv\Scripts\pip install -r requirements.txt
-winget install Ollama.Ollama
 winget install UB-Mannheim.TesseractOCR
-ollama pull llama3.2:3b
 ```
 
-Copy `.env.example` to `.env` and adjust if paths differ.
+Copy `.env.example` to `.env` and fill in `ANTHROPIC_API_KEY` at minimum — everything
+else has a working default (`QDRANT_MODE=local` needs no Docker to get started).
 
-## Verify everything works
-
+```powershell
+copy .env.example .env
+# edit .env, add your ANTHROPIC_API_KEY
 ```
+
+Verify the stack is healthy:
+
+```powershell
 venv\Scripts\python.exe scripts\verify_setup.py
 ```
 
-Checks Ollama connectivity + generation, Tesseract, PDF/DOCX parsers, FastAPI,
-and embeddings — run this after any environment change.
+## Running it
+
+```powershell
+# ingest the sample/reference documents (parse + OCR fallback + chunk + embed + index)
+venv\Scripts\python.exe scripts\ingest.py
+
+# launch the demo UI — Conversational Search, Draft a Document, Summarize a Document
+venv\Scripts\python.exe -m streamlit run scripts\demo_app.py
+```
+
+Open `http://localhost:8501`. Drafting and Q&A make real, billed API calls — the
+drafting tab shows a cost estimate before you hit Generate.
+
+### Optional: real Qdrant server instead of embedded mode
+
+```powershell
+docker run -d --name qdrant -p 6333:6333 -v qdrant_storage:/qdrant/storage qdrant/qdrant
+```
+
+Set `QDRANT_MODE=server` in `.env`, then re-run `scripts\ingest.py`.
 
 ## Project layout
 
 ```
-ingestion/    - file parsing, OCR routing, chunking
-retrieval/    - embedding + vector store + retrieval logic
-generation/   - RAG Q&A, drafting engine (templates), citation enforcement
-guardrails/   - hallucination checks, "no info found" / "access denied" logic
-api/          - FastAPI endpoints
-data/samples/ - test documents (gitignored — don't commit real QCI data)
-scripts/      - setup/verification/one-off scripts
+ingestion/       parser.py (PDF/DOCX/XLSX/PPTX + OCR fallback), chunker.py,
+                 classifier.py (document type/category), versioning.py
+retrieval/       embedder.py (multilingual-e5), store.py (Qdrant wrapper)
+generation/      rag.py (Q&A), drafting.py (template engine + narrative generation),
+                 summarize.py, diagram_render.py, html_mockup.py, export.py (PDF),
+                 voice.py, llm_client.py (shared Claude client), template_settings.py
+  templates/     13 .docx templates (docxtpl Jinja placeholders)
+guardrails/      fallback.py, citation.py, audit_log.py
+scripts/         build_templates.py, demo_app.py, ingest.py, ask.py, draft.py,
+                 verify_setup.py, and test_*.py scripts for each subsystem
+data/
+  samples/       reference government/business documents (see SOURCES.md)
+  generated/     drafted .docx/.pdf output (versioned, gitignored)
+  processed/     audit_log.jsonl
+config.py        all env-driven settings, one place, not scattered
 ```
 
-## OCR fallback — now validated
+## Templates
 
-None of the 5 real sample docs ever triggered OCR (even the "scanned" 2001 circular
-had native text), so this path was built but unproven. Closed the gap by
-manufacturing a genuinely image-only PDF (`scripts/test_ocr.py` — rendered text
-baked into a raster image, saved as PDF, zero text layer) with known ground-truth
-content:
+**Work Orders:** Services · Goods/Supply · AMC
+**MoUs:** Standard · International · Inter-Departmental
+**Agreements:** Service · Consultancy · Licensing
+**Proposals:** Technical (with diagrams + mockups) · Financial · Combined
+**Plus:** a full 17-section Technical Proposal template modelled on real Source Soft
+Solutions proposals, with architecture diagrams, data-flow diagrams, and UI mockups.
 
-```
-venv\Scripts\python.exe scripts\test_ocr.py
-```
+## Guardrails
 
-Results: the `<40`-char threshold correctly detected it as scan-like and routed
-to Tesseract. Raw comparison scored 90.6%, but that number was noisy — OCR
-preserves line-wrap newlines that the ground truth string doesn't have, which
-`difflib` counts as edits. After normalizing whitespace, **real accuracy is
-99.5%**, comfortably clearing the RFP's benchmark. The only actual misread across
-the whole paragraph: capital **"I" → "l"**, twice, both times in "AI-powered" /
-"AI-enabled" — the classic I/l/1 sans-serif ambiguity. Worth watching in
-production since this corpus's subject matter means "AI" appears constantly.
+**Q&A (`guardrails/`, `generation/rag.py`):**
+1. Retrieval-score threshold — below a calibrated similarity score, skip the LLM
+   entirely rather than answer on weak context.
+2. LLM self-report — the model is required to say when the retrieved context doesn't
+   support an answer.
+3. Citation validation — every citation number in an answer is checked against the
+   actual retrieved chunks, not trusted at face value.
 
-## Not yet installed (needed for later phases)
+**Drafting (`generation/drafting.py`):**
+- Brief validation — rejects placeholder/too-short input before generation runs.
+- Known-facts grounding — party/project names are stated explicitly in every prompt
+  so the model can't invent plausible-sounding organisation names.
+- Entity-leak detection — if a name from a reference document (used for tone only)
+  leaks into generated output without being in the user's brief, the system detects
+  it and regenerates with no reference grounding.
+- Mockup screenshot validation — an AI-generated HTML mockup is rejected (falls back
+  to a built-in template) if the resulting screenshot doesn't look like a real page.
 
-- **multilingual-e5-large** — the production embedding model (~2GB download),
-  intentionally not pulled yet; verify script uses a tiny model instead.
-- **Llama 3.1 8B** — optional quality-check model, pull via `ollama pull llama3.1:8b`
-  when needed (see RAM notes in project chat — close other apps first).
+Every Q&A interaction is logged to `data/processed/audit_log.jsonl`.
 
-## Docker / Qdrant
+## Known limitations
 
-**Working.** Root cause of the earlier "restart didn't fix it" issue: Windows
-Fast Startup (`HiberbootEnabled=1`) makes "Shut down" hibernate the kernel
-instead of truly restarting it, so the pending WSL feature install never
-applied until an actual "Restart" was used. Post-restart: WSL2 came up clean,
-Docker Desktop was launched, and Qdrant is running as a real container:
+- Hindi/Hinglish voice transcription was built and tested against real recordings,
+  found unreliable (language auto-detection fails on code-switched speech), and
+  deliberately dropped — English-only by design, not by oversight.
+- No login/RBAC layer — out of scope for this PoC.
+- No review/revise feedback loop on drafts yet — each draft is generated once.
+- Retrieval-score threshold is calibrated against the current sample corpus and will
+  need re-tuning as the real document corpus grows.
 
-```
-docker run -d --name qdrant -p 6333:6333 -v qdrant_storage:/qdrant/storage qdrant/qdrant
-```
-
-`.env` now has `QDRANT_MODE=server` (was `local`). Re-ran `scripts/ingest.py`
-against it — same 304 chunks, confirmed via `scripts/query.py`. The local
-embedded-mode data in `./qdrant_storage/` (the folder, not the Docker volume of
-the same name) is now redundant and can be deleted once you're confident the
-server mode is staying.
-
-## Sample documents
-
-5 real government/QCI PDFs in `data/samples/` (see `SOURCES.md` for provenance) —
-covers a real QCI procurement doc, a Govt of India MoU, two tender/work-order
-docs, and one older scan-quality circular for OCR testing.
-
-## Phase 1 — Ingestion → Retrieval
-
-```
-venv\Scripts\python.exe scripts\ingest.py                    # parse + chunk + embed + index
-venv\Scripts\python.exe scripts\query.py "your question" 5   # manual retrieval check, no LLM involved
-```
-
-Results so far (5 sample docs, 304 chunks, embedded Qdrant in `./qdrant_storage`):
-top-1 cosine scores of 0.82–0.86, correct document discrimination, citations traceable
-to exact source file + page. None of the 5 sample docs triggered the OCR fallback
-(the "scanned" circular turned out to have native embedded text) — still need a
-genuinely image-only PDF to validate that path before calling OCR done.
-
-`retrieval/store.py` supports both `QDRANT_MODE=local` (current, embedded, no
-Docker) and `QDRANT_MODE=server` (flip after restarting, points at the Docker
-container) — same code either way.
-
-## Status
-
-- [x] Phase 0: repo, venv, Ollama + Llama 3.2 3B, Tesseract, verified
-- [x] Docker Desktop + CLI installed (restart pending to activate)
-- [x] 5 sample documents downloaded
-- [x] Phase 1: ingestion pipeline (parse/OCR-fallback/chunk/embed/index) built and validated
-- [x] Retrieval sanity-checked — strong scores, correct citations
-- [ ] **Restart the machine** to activate WSL2/Docker, then switch `QDRANT_MODE=server`
-- [ ] Find/create a real scanned (image-only) PDF to validate the OCR fallback path
-- [x] Phase 2: RAG Q&A with citation enforcement + "no info found" guardrail
-- [x] Phase 3: Document drafting engine (Work Order template)
-- [x] Demo UI (Streamlit, both Q&A and drafting tabs) — `streamlit run scripts\demo_app.py`
-
-## Phase 3 — Document drafting
-
-```
-venv\Scripts\python.exe scripts\test_draft.py    # non-interactive smoke test
-venv\Scripts\python.exe scripts\draft.py         # interactive CLI
-# or use the "Draft a Work Order" tab in the Streamlit demo
-```
-
-`generation/drafting.py`: fixed, deterministic field schema (not LLM-improvised —
-a work order's required fields are procedural fact, not judgment) drives the
-clarifying-questions flow; the LLM only expands two narrative sections (scope of
-work, terms & conditions), grounded by retrieving similar ingested documents for
-tone/structure. Auto-versions (v1, v2...) per work order number.
-
-**Two real bugs caught by actually reading the generated output, not just
-checking the file was created:**
-1. `docxtpl` doesn't XML-escape substituted values — a bare `&` (e.g. "IT & Digital
-   Initiatives") produced invalid XML that silently corrupted on read-back into
-   "IT  Digital Initiatives". Fixed by escaping every string field before render.
-2. The 3B model wrapped output in meta-commentary ("Here is a formal paragraph...",
-   trailing "Note: consult a lawyer...") and fabricated a specific "10% penalty"
-   figure despite being told not to invent numbers — same instruction-following
-   gap as Phase 2's guardrail bug. Fixed with a stricter prompt (explicit
-   "[to be specified]" instruction for unknown figures) plus a post-processing
-   strip of known preamble/postamble patterns, same defense-in-depth approach as
-   the Phase 2 guardrails rather than trusting the prompt alone.
-
-## Phase 2 — RAG Q&A with guardrails
-
-```
-venv\Scripts\python.exe scripts\ask.py "your question"
-```
-
-Three-layer defense against ungrounded answers:
-1. **Retrieval-score fallback** — below `RETRIEVAL_SCORE_THRESHOLD`, skip the LLM entirely.
-2. **LLM self-report** — prompted to output exactly `NO_INFO_FOUND` when the excerpts don't support an answer (checked as substring anywhere in the response, not just a prefix — see finding below).
-3. **Citation validation** — post-hoc check that the answer actually cited sources, and that every cited index maps to a real retrieved chunk (`guardrails/citation.py`).
-
-Every interaction (question, answer, retrieved chunks, citations, guardrail pass/fail) is logged to `data/processed/audit_log.jsonl`.
-
-**Finding from testing, not glossed over:** the naive version of this failed. Initial
-`RETRIEVAL_SCORE_THRESHOLD=0.45` did nothing — on this corpus, clearly relevant
-queries scored 0.80–0.87 and clearly *irrelevant* ones still scored 0.74–0.77
-(multilingual-e5 cosine similarity isn't a calibrated relevance scale). An
-off-topic question got past retrieval, and the 3B model then partially answered
-one part of a multi-part question while burying `NO_INFO_FOUND` mid-response
-around a fabricated citation — which the original `startswith()` check missed
-entirely. Fixed by: raising the threshold to 0.78 (see `scripts/calibrate_threshold.py`,
-flagged in config as corpus-specific and due for re-calibration as real data
-comes in), checking for the token anywhere in the output, and instructing the
-model to fully refuse rather than partially answer multi-part questions.
-Retested against the same failure case — now catches cleanly.
+See `Memory.md` for the full build log, every bug found and how it was fixed, and the
+reasoning behind each architectural decision.
